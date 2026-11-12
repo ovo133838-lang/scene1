@@ -1,0 +1,8 @@
+.env*
+!.env.example
+bin/
+coverage*
+evidence/raw/
+*.log
+__pycache__/
+*.pyc

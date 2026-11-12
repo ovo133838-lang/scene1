@@ -1,0 +1,22 @@
+-- DESTRUCTIVE: isolated test DB only; never automatically invoked
+SET FOREIGN_KEY_CHECKS=0;
+DROP TABLE IF EXISTS `demo_clock`;
+DROP TABLE IF EXISTS `audit_events`;
+DROP TABLE IF EXISTS `outbox_jobs`;
+DROP TABLE IF EXISTS `idempotency_records`;
+DROP TABLE IF EXISTS `anomaly_actions`;
+DROP TABLE IF EXISTS `payment_anomalies`;
+DROP TABLE IF EXISTS `shipments`;
+DROP TABLE IF EXISTS `refund_attempts`;
+DROP TABLE IF EXISTS `refunds`;
+DROP TABLE IF EXISTS `refund_applications`;
+DROP TABLE IF EXISTS `auth_nonces`;
+DROP TABLE IF EXISTS `channel_notifications`;
+DROP TABLE IF EXISTS `receipts`;
+DROP TABLE IF EXISTS `payment_intents`;
+DROP TABLE IF EXISTS `inventory_ledger`;
+DROP TABLE IF EXISTS `orders`;
+DROP TABLE IF EXISTS `products`;
+DROP TABLE IF EXISTS `sessions`;
+DROP TABLE IF EXISTS `accounts`;
+SET FOREIGN_KEY_CHECKS=1;

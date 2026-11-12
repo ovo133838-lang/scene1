@@ -1,0 +1,18 @@
+[Unit]
+Description=Scene1 teaching shop
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=scene1
+Group=scene1
+WorkingDirectory=/opt/scene1/current
+EnvironmentFile=/etc/scene1/shop.env
+ExecStart=/opt/scene1/current/scene1 -mode shop -env /dev/null
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target

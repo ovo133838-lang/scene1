@@ -1,0 +1,127 @@
+name: scene1-quality-and-release
+on:
+  pull_request:
+    branches: [main]
+    paths: ['apps/scene1/**', '.agent/**', '.agents/**', 'docs/scene1/**', '.github/workflows/scene1.yml']
+  push:
+    branches: [main, dev/01]
+    paths: ['apps/scene1/**', '.agent/**', '.agents/**', 'docs/scene1/**', '.github/workflows/scene1.yml']
+permissions:
+  contents: read
+concurrency:
+  group: scene1-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/scene1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/scene1/go.mod
+          cache-dependency-path: apps/scene1/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Format, vet, two unit rounds, per-package coverage, race and build
+        run: python scripts/ci_quality.py
+      - name: Build exact Linux release
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags "-X main.version=$RELEASE_SHA" -o dist/scene1 ./cmd/scene1
+          cp scripts/smoke.py scripts/deploy-linux.sh dist/
+          chmod +x dist/scene1 dist/deploy-linux.sh
+          cd dist
+          sha256sum scene1 smoke.py deploy-linux.sh > SHA256SUMS
+          tar -czf ../scene1-linux-amd64.tar.gz scene1 smoke.py deploy-linux.sh SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scene1-quality-${{ github.sha }}
+          path: apps/scene1/evidence/ci-quality/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scene1-linux-${{ github.sha }}
+          path: apps/scene1/scene1-linux-amd64.tar.gz
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    defaults:
+      run:
+        working-directory: apps/scene1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/scene1/go.mod
+          cache-dependency-path: apps/scene1/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare isolated HTTP test environment
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y default-mysql-client
+          python -m pip install pymysql
+          python - <<'PY'
+          import pathlib,secrets
+          env={'SCENE1_MYSQL_DSN':'root:root@tcp(127.0.0.1:3306)/scene1_test?parseTime=true&loc=UTC','SCENE1_MOCK_DSN':'root:root@tcp(127.0.0.1:3306)/scene1_mock_test?parseTime=true&loc=UTC','SCENE1_PASSWORD':secrets.token_hex(16),'SCENE1_HMAC_SECRET':secrets.token_hex(32),'SCENE1_ADMIN_TOKEN':secrets.token_hex(32),'SCENE1_DEMO':'true'}
+          pathlib.Path('.env.test.local').write_text(''.join(k+'='+v+'\n' for k,v in env.items()),encoding='utf-8')
+          PY
+      - name: Real API boundary, role, idempotency, dependency and two scenario rounds
+        env:
+          SCENE1_MATRIX_OUT: ${{ github.workspace }}/apps/scene1/evidence/ci-integration
+        run: python scripts/api_matrix_20261112.py
+      - name: Explicit barrier stock and seven business races, two rounds
+        env:
+          SCENE1_MATRIX_OUT: ${{ github.workspace }}/apps/scene1/evidence/ci-integration
+        run: python scripts/api_barrier_20261112.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scene1-integration-${{ github.sha }}
+          path: apps/scene1/evidence/ci-integration/
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [quality, integration]
+    runs-on: ubuntu-latest
+    environment: scene1-teaching
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: scene1-linux-${{ github.sha }}
+      - name: Deploy merged main revision and run health/business smoke
+        env:
+          DEPLOY_HOST: ${{ secrets.SCENE1_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.SCENE1_DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.SCENE1_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SCENE1_KNOWN_HOSTS }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER" && test -n "$DEPLOY_KEY" && test -n "$KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/scene1-key
+          chmod 600 ~/.ssh/scene1-key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          scp -i ~/.ssh/scene1-key scene1-linux-amd64.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/scene1-$RELEASE_SHA.tar.gz"
+          tar -xzf scene1-linux-amd64.tar.gz deploy-linux.sh
+          ssh -i ~/.ssh/scene1-key "$DEPLOY_USER@$DEPLOY_HOST" "sudo bash -s -- /tmp/scene1-$RELEASE_SHA.tar.gz $RELEASE_SHA" < deploy-linux.sh | tee deployment-result.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scene1-deployment-${{ github.sha }}
+          path: deployment-result.log

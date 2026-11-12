@@ -1,0 +1,1 @@
+ALTER TABLE refund_applications DROP CHECK ck_review_fields, ADD CONSTRAINT ck_review_fields CHECK ((status='PENDING' AND reviewer_id IS NULL AND reviewed_at IS NULL AND review_reason IS NULL) OR (status IN('APPROVED','REJECTED') AND reviewer_id IS NOT NULL AND reviewed_at IS NOT NULL AND review_reason IS NOT NULL AND CHAR_LENGTH(TRIM(review_reason)) BETWEEN 1 AND 500));
