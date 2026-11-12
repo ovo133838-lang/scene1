@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-12",
+  "assignmentOriginal": "D:/Desktop/Go项目业务场景题.md",
+  "assignmentFullSha256": "4e49fcd8b2e454f27bc5168d2018187613e34847e2fd5adc6cba8409779d26e8",
+  "scope": "全部共通要求及题目01，原文1–230行（231分隔空行保留）；不要求此时完成其余19题",
+  "originalCopies": [
+    {
+      "file": "docs/scene1/source/assignment.md",
+      "sha256": "37e3dba7b58bbd814a2b5e3c13a30df7bc9b0ca6767a06fdc15d7f2092102cc0"
+    },
+    {
+      "file": "docs/scene1/source/commit-convention.md",
+      "sha256": "8db6fcbdcba9b72e53a6dddce7d58762fbd1de58a1c5afe51e48c8bb075af28e"
+    },
+    {
+      "file": "docs/scene1/source/01-需求说明.md",
+      "sha256": "fa4bcce117eced4b54e808db79b4be654f9303137862b05233cf9a467d547d90"
+    },
+    {
+      "file": "docs/scene1/source/02-业务流程与状态.md",
+      "sha256": "0143e30ee840e4d0bd146d734001d35bcd71ae715e5f39f39b080d634923eedd"
+    },
+    {
+      "file": "docs/scene1/source/03-假设与确认清单.md",
+      "sha256": "56792fe2c9d7eec27af4c70154c63813af04b4b679d4a9e052619dce711b8d9d"
+    },
+    {
+      "file": "docs/scene1/source/04-验收条件.md",
+      "sha256": "9300164db6fde378878bf607a994bb7d348d6f83f074d19d11703060b86abeab"
+    }
+  ],
+  "note": "需求/假设/验收原件是2026-11-11阶段快照；正文历史状态不当当前实现结果"
+}

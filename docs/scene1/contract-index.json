@@ -1,0 +1,5708 @@
+{
+  "version": "0.2-implementation",
+  "date": "2026-11-12",
+  "executionStatus": "IMPLEMENTED_PENDING_INDEPENDENT_ACCEPTANCE",
+  "tables": [
+    {
+      "name": "accounts",
+      "purpose": "预置可信身份；不提供注册、角色自助提升",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "账号ID",
+          "主键",
+          "不能由请求body替代当前身份"
+        ],
+        [
+          "login_name",
+          "varchar(64)",
+          "非空",
+          "3–64字符，仅教学账号",
+          "唯一",
+          "重复名称拒绝"
+        ],
+        [
+          "password_hash",
+          "text",
+          "非空",
+          "Argon2id含盐哈希，禁止明文",
+          "不得返回API",
+          "校验错误密码、不泄露哈希"
+        ],
+        [
+          "display_name",
+          "varchar(80)",
+          "非空",
+          "1–80字符",
+          "无",
+          "超长/空白拒绝"
+        ],
+        [
+          "role",
+          "varchar(16)",
+          "非空",
+          "BUYER/OPERATOR/WAREHOUSE/SUPPORT",
+          "CHECK枚举",
+          "角色伪造拒绝"
+        ],
+        [
+          "enabled",
+          "boolean",
+          "非空，true",
+          "停用后请求立即拒绝",
+          "无",
+          "已发token不能绕过停用"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "UTC写入",
+          "无",
+          "返回RFC3339"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "UTC写入",
+          "无",
+          "变更不早于创建"
+        ]
+      ],
+      "checks": "种子恰好3买家及运营/仓库/客服各1；商品B和员工数为设计建议A03。种子密码来自教学环境配置，不提交真实凭证。"
+    },
+    {
+      "name": "sessions",
+      "purpose": "不依赖客户端自报身份的随机令牌会话",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "会话ID",
+          "主键",
+          "不可预测"
+        ],
+        [
+          "account_id",
+          "uuid",
+          "非空",
+          "所属账号",
+          "FK accounts",
+          "不存在账号拒绝"
+        ],
+        [
+          "token_hash",
+          "char(64)",
+          "非空",
+          "随机256位令牌SHA256",
+          "唯一",
+          "仅创建时返回明文token，数据库无明文"
+        ],
+        [
+          "expires_at",
+          "timestamptz",
+          "非空",
+          "建议8小时会话时效",
+          "索引",
+          "到期立即401"
+        ],
+        [
+          "revoked_at",
+          "timestamptz",
+          "可空",
+          "登出/撤销时间",
+          "无",
+          "撤销后401"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "真实服务端时间",
+          "无",
+          "不得使用业务教学时钟延长认证"
+        ]
+      ],
+      "checks": "业务教学时钟与认证时间分离；Authorization: Bearer，前端仅内存持有。刷新重新登录。"
+    },
+    {
+      "name": "products",
+      "purpose": "商品当前信息与可分配数量；余额同事务维护",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "商品ID",
+          "主键",
+          "固定两商品"
+        ],
+        [
+          "sku",
+          "varchar(32)",
+          "非空",
+          "教学商品编码",
+          "唯一",
+          "重复拒绝"
+        ],
+        [
+          "name",
+          "varchar(120)",
+          "非空",
+          "去首尾空白后1–120字符",
+          "无",
+          "空白/超长拒绝"
+        ],
+        [
+          "unit_price_cents",
+          "bigint",
+          "非空",
+          "1..1000000000，人民币分",
+          "CHECK",
+          "零、负、小数、溢出拒绝"
+        ],
+        [
+          "sale_status",
+          "varchar(16)",
+          "非空，OFF_SHELF",
+          "ON_SHELF/OFF_SHELF",
+          "CHECK",
+          "枚举外拒绝"
+        ],
+        [
+          "initial_quantity",
+          "bigint",
+          "非空",
+          "0..1000000，种子后不可改",
+          "CHECK",
+          "运营不能修改初始基数"
+        ],
+        [
+          "available_quantity",
+          "bigint",
+          "非空",
+          "0..1000000",
+          "CHECK非负",
+          "下单/调整竞争不负数"
+        ],
+        [
+          "reserved_quantity",
+          "bigint",
+          "非空，0",
+          "活动订单占用",
+          "CHECK非负",
+          "与订单数量合计相等"
+        ],
+        [
+          "shipped_quantity",
+          "bigint",
+          "非空，0",
+          "已出库累计",
+          "CHECK非负",
+          "每单一次出库"
+        ],
+        [
+          "adjustment_net",
+          "bigint",
+          "非空，0",
+          "运营调整净额，可负",
+          "守恒CHECK",
+          "初始+净额=可售+占用+出库"
+        ],
+        [
+          "version",
+          "bigint",
+          "非空，0",
+          "每次商品/库存变化递增",
+          "乐观锁",
+          "旧version修改返回409"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "创建UTC",
+          "无",
+          "稳定"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "更新UTC",
+          "无",
+          "同事务更新"
+        ]
+      ],
+      "checks": "商品A=10000分/5件；B建议20000分/8件。以上数值上限为技术防溢出建议，不是原题既定限制；审核后写入配置/API。库存上限也限制运营正调整。"
+    },
+    {
+      "name": "orders",
+      "purpose": "单品订单快照；主状态为唯一业务裁决",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "订单ID",
+          "主键",
+          "全链关联"
+        ],
+        [
+          "order_no",
+          "varchar(40)",
+          "非空",
+          "不含个人信息的展示单号",
+          "唯一",
+          "不以可猜单号代替权限"
+        ],
+        [
+          "buyer_id",
+          "uuid",
+          "非空",
+          "下单账号",
+          "FK accounts",
+          "必须BUYER且由会话注入"
+        ],
+        [
+          "product_id",
+          "uuid",
+          "非空",
+          "商品ID",
+          "FK products",
+          "不可换商品"
+        ],
+        [
+          "sku_snapshot",
+          "varchar(32)",
+          "非空",
+          "创建时SKU",
+          "不可变",
+          "后续商品变化不改"
+        ],
+        [
+          "name_snapshot",
+          "varchar(120)",
+          "非空",
+          "创建时名称",
+          "不可变",
+          "调名不改"
+        ],
+        [
+          "unit_price_cents",
+          "bigint",
+          "非空",
+          "创建时价格分",
+          "CHECK >0",
+          "客户端价格不能覆盖"
+        ],
+        [
+          "quantity",
+          "smallint",
+          "非空",
+          "1或2",
+          "CHECK IN(1,2)",
+          "0/3/负/小数拒绝"
+        ],
+        [
+          "amount_cents",
+          "bigint",
+          "非空",
+          "快照单价乘数量",
+          "CHECK等式",
+          "旧价付款；溢出前检查"
+        ],
+        [
+          "status",
+          "varchar(24)",
+          "非空，PENDING_PAYMENT",
+          "七主状态见业务约束",
+          "CHECK",
+          "禁止任意PATCH状态"
+        ],
+        [
+          "normal_receipt_id",
+          "uuid",
+          "可空",
+          "唯一正常付款",
+          "唯一FK receipts",
+          "一个正常付款只履约一次"
+        ],
+        [
+          "active_application_id",
+          "uuid",
+          "可空",
+          "当前未拒绝/未结束退款申请",
+          "FK refund_applications",
+          "同一时刻一个活动申请"
+        ],
+        [
+          "close_reason",
+          "varchar(24)",
+          "可空",
+          "BUYER_CANCELLED/TIMEOUT",
+          "CHECK状态配套",
+          "关闭必须有原因"
+        ],
+        [
+          "expires_at",
+          "timestamptz",
+          "非空",
+          "创建业务时间+10分钟",
+          "索引(status,expires_at)",
+          "恰好截止过期"
+        ],
+        [
+          "paid_at",
+          "timestamptz",
+          "可空",
+          "商城确认正常支付时间",
+          "无",
+          "渠道时间不能代替"
+        ],
+        [
+          "closed_at",
+          "timestamptz",
+          "可空",
+          "首次关闭时间",
+          "无",
+          "重复关闭不覆盖"
+        ],
+        [
+          "refunded_at",
+          "timestamptz",
+          "可空",
+          "普通退款首次结算时间",
+          "无",
+          "异常退款不改订单为已退款"
+        ],
+        [
+          "shipped_at",
+          "timestamptz",
+          "可空",
+          "发货时间",
+          "无",
+          "与shipments一致"
+        ],
+        [
+          "version",
+          "bigint",
+          "非空，0",
+          "状态变更递增",
+          "无",
+          "竞争裁决可追溯"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "创建业务时间",
+          "索引(buyer_id,created_at,id)",
+          "排序稳定"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "更新业务时间",
+          "无",
+          "同事务更新"
+        ]
+      ],
+      "checks": "主状态PENDING_PAYMENT/CLOSED/PENDING_SHIPMENT/REFUND_REVIEW/REFUND_PROCESSING/REFUNDED/SHIPPED。循环FK用后置ALTER迁移；active_application_id与status在同一事务维护，不使用没有恢复机制的延后补写。"
+    },
+    {
+      "name": "inventory_ledger",
+      "purpose": "追加式库存事实，不修改或删除历史",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "流水ID",
+          "主键",
+          "唯一"
+        ],
+        [
+          "product_id",
+          "uuid",
+          "非空",
+          "关联商品",
+          "FK products",
+          "不存在拒绝"
+        ],
+        [
+          "order_id",
+          "uuid",
+          "可空",
+          "占用/释放/发货关联订单",
+          "FK orders",
+          "ADJUST可空，其余必填"
+        ],
+        [
+          "refund_id",
+          "uuid",
+          "可空",
+          "普通退款释放关联退款",
+          "FK refunds",
+          "退款释放必须可追溯"
+        ],
+        [
+          "actor_id",
+          "uuid",
+          "可空",
+          "操作人，系统关闭可空",
+          "FK accounts",
+          "非系统调整必填"
+        ],
+        [
+          "event_type",
+          "varchar(24)",
+          "非空",
+          "RESERVE/CLOSE_RELEASE/REFUND_RELEASE/SHIP/ADJUST",
+          "CHECK",
+          "迟到退款无库存事件"
+        ],
+        [
+          "event_key",
+          "varchar(120)",
+          "非空",
+          "订单动作唯一键或调整请求键",
+          "唯一",
+          "同动作重放不多生效"
+        ],
+        [
+          "delta_available",
+          "bigint",
+          "非空",
+          "可售变化",
+          "CHECK事件向量",
+          "占用-q，释放+q"
+        ],
+        [
+          "delta_reserved",
+          "bigint",
+          "非空",
+          "占用变化",
+          "CHECK事件向量",
+          "占用+q，释放/出库-q"
+        ],
+        [
+          "delta_shipped",
+          "bigint",
+          "非空",
+          "出库变化",
+          "CHECK事件向量",
+          "仅SHIP为+q"
+        ],
+        [
+          "delta_adjustment",
+          "bigint",
+          "非空",
+          "调整净额变化",
+          "CHECK事件向量",
+          "仅ADJUST与可售同值"
+        ],
+        [
+          "available_before",
+          "bigint",
+          "非空",
+          "可售前值",
+          "CHECK>=0",
+          "前后值匹配"
+        ],
+        [
+          "available_after",
+          "bigint",
+          "非空",
+          "可售后值",
+          "CHECK=before+delta",
+          "不负数"
+        ],
+        [
+          "reserved_before",
+          "bigint",
+          "非空",
+          "占用前值",
+          "CHECK>=0",
+          "与商品事务一致"
+        ],
+        [
+          "reserved_after",
+          "bigint",
+          "非空",
+          "占用后值",
+          "CHECK=before+delta",
+          "不负数"
+        ],
+        [
+          "shipped_before",
+          "bigint",
+          "非空",
+          "出库前值",
+          "CHECK>=0",
+          "与商品事务一致"
+        ],
+        [
+          "shipped_after",
+          "bigint",
+          "非空",
+          "出库后值",
+          "CHECK=before+delta",
+          "不负数"
+        ],
+        [
+          "reason",
+          "varchar(500)",
+          "非空",
+          "原因1–500字符",
+          "无",
+          "调整必填，系统原因固定码说明"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "索引(product_id,created_at,id)",
+          "可重算余额"
+        ]
+      ],
+      "checks": "CHECK向量：RESERVE=(-q,+q,0,0)，CLOSE/REFUND_RELEASE=(+q,-q,0,0)，SHIP=(0,-q,+q,0)，ADJUST=(d,0,0,d)。q取关联订单数量，由服务端验证；唯一键阻止重复生效。"
+    },
+    {
+      "name": "payment_intents",
+      "purpose": "商城侧支付发起及结果待确认，不代表实收",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "支付意图ID",
+          "主键",
+          "重试原请求返回同一意图"
+        ],
+        [
+          "order_id",
+          "uuid",
+          "非空",
+          "关联订单",
+          "FK orders",
+          "必须本人有效待付款"
+        ],
+        [
+          "provider_request_id",
+          "varchar(80)",
+          "非空",
+          "渠道支付幂等键",
+          "唯一",
+          "未知时沿用此键查询"
+        ],
+        [
+          "amount_cents",
+          "bigint",
+          "非空",
+          "订单应付快照",
+          "CHECK >0",
+          "不接受body金额"
+        ],
+        [
+          "currency",
+          "char(3)",
+          "非空，CNY",
+          "币种",
+          "CHECK=CNY",
+          "其他币种拒绝"
+        ],
+        [
+          "status",
+          "varchar(24)",
+          "非空，READY",
+          "READY/PENDING/SUCCEEDED/FAILED/UNKNOWN",
+          "CHECK",
+          "成功不等于已获正常履约资格"
+        ],
+        [
+          "provider_txn_id",
+          "varchar(80)",
+          "可空",
+          "渠道交易ID",
+          "索引",
+          "最终以receipts唯一归属"
+        ],
+        [
+          "failure_code",
+          "varchar(64)",
+          "可空",
+          "安全原因码",
+          "无",
+          "无渠道密钥/堆栈"
+        ],
+        [
+          "last_queried_at",
+          "timestamptz",
+          "可空",
+          "最后查询业务时间",
+          "无",
+          "未知可查询"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "索引(order_id,created_at)",
+          "保留历史"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "无",
+          "状态更新可追溯"
+        ]
+      ],
+      "checks": "每单最多一个非FAILED支付意图，部分唯一索引WHERE status IN(READY,PENDING,SUCCEEDED,UNKNOWN)。明确失败可新建，UNKNOWN禁止第二次实际扣款（A12建议待审）。"
+    },
+    {
+      "name": "receipts",
+      "purpose": "经可信渠道确认的实际收款；通知失败不能写本表",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "收款ID",
+          "主键",
+          "退款依据"
+        ],
+        [
+          "provider",
+          "varchar(24)",
+          "非空，MOCK",
+          "渠道名",
+          "联合唯一键组成",
+          "渠道身份独立"
+        ],
+        [
+          "provider_txn_id",
+          "varchar(80)",
+          "非空",
+          "渠道交易ID",
+          "唯一(provider,provider_txn_id)",
+          "跨订单重放不改归属"
+        ],
+        [
+          "external_order_ref",
+          "varchar(80)",
+          "非空",
+          "渠道原始订单引用",
+          "不可变",
+          "未知订单也保留原引用"
+        ],
+        [
+          "order_id",
+          "uuid",
+          "可空",
+          "商城可核实订单",
+          "FK orders",
+          "未知订单不伪造订单"
+        ],
+        [
+          "payment_intent_id",
+          "uuid",
+          "可空",
+          "关联商城意图",
+          "FK payment_intents",
+          "外部注入可空"
+        ],
+        [
+          "amount_cents",
+          "bigint",
+          "非空",
+          "渠道核实实际金额",
+          "CHECK>0",
+          "金额异常仍按真实金额记录"
+        ],
+        [
+          "currency",
+          "char(3)",
+          "非空",
+          "CNY",
+          "CHECK=CNY",
+          "不转换币种"
+        ],
+        [
+          "classification",
+          "varchar(24)",
+          "非空",
+          "NORMAL/LATE/EXTRA/AMOUNT_MISMATCH/UNKNOWN_ORDER",
+          "CHECK",
+          "非NORMAL不能放行订单"
+        ],
+        [
+          "proof_type",
+          "varchar(16)",
+          "非空",
+          "SIGNED_NOTIFY/CHANNEL_QUERY",
+          "CHECK",
+          "验签失败不建立收款"
+        ],
+        [
+          "verified_at",
+          "timestamptz",
+          "非空",
+          "商城完成可信核验业务时间",
+          "无",
+          "晚到分类可验证"
+        ],
+        [
+          "provider_paid_at",
+          "timestamptz",
+          "非空",
+          "渠道付款时间，仅证据",
+          "无",
+          "不延长有效期"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "首次保存时间",
+          "无",
+          "重复不增加实收"
+        ]
+      ],
+      "checks": "一个订单NORMAL收款最多一笔：部分唯一索引order_id WHERE classification=NORMAL。冲突通知不覆盖原收款；额外收款经独立可信查询才入账并建异常。正常和异常实收均计实收，异常单列。"
+    },
+    {
+      "name": "channel_notifications",
+      "purpose": "支付/退款通知每次接收与查询结果，含无效及重复",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "接收记录ID",
+          "主键",
+          "重复通知也新增接收轨迹"
+        ],
+        [
+          "kind",
+          "varchar(16)",
+          "非空",
+          "PAYMENT/REFUND",
+          "CHECK",
+          "不同协议分开校验"
+        ],
+        [
+          "provider",
+          "varchar(24)",
+          "非空",
+          "渠道名",
+          "无",
+          "白名单"
+        ],
+        [
+          "provider_event_id",
+          "varchar(80)",
+          "可空",
+          "渠道事件ID",
+          "非唯一索引",
+          "不能只凭事件ID决定资金幂等"
+        ],
+        [
+          "external_order_ref",
+          "varchar(80)",
+          "可空",
+          "声称的订单引用",
+          "无",
+          "未核实不得信任"
+        ],
+        [
+          "provider_txn_id",
+          "varchar(80)",
+          "可空",
+          "声称交易号",
+          "索引",
+          "冲突保留"
+        ],
+        [
+          "provider_refund_id",
+          "varchar(80)",
+          "可空",
+          "声称退款号",
+          "索引",
+          "匹配attempt"
+        ],
+        [
+          "claimed_amount_cents",
+          "bigint",
+          "可空",
+          "成功解析的声称金额",
+          "无",
+          "非法负/溢出只在安全摘要记录"
+        ],
+        [
+          "payload_hash",
+          "char(64)",
+          "非空",
+          "原始请求SHA256",
+          "无",
+          "不保留密钥"
+        ],
+        [
+          "payload_redacted",
+          "jsonb",
+          "非空，{}",
+          "有上限的脱敏要点",
+          "无",
+          "脱敏不损失业务关键标识"
+        ],
+        [
+          "auth_valid",
+          "boolean",
+          "非空，false",
+          "是否通过HMAC",
+          "无",
+          "失败不改业务"
+        ],
+        [
+          "process_result",
+          "varchar(32)",
+          "非空",
+          "ACCEPTED/DUPLICATE/INVALID_SIGNATURE/REPLAYED_SIGNATURE/AMOUNT_MISMATCH/UNKNOWN_ORDER/TXN_CONFLICT/INVALID_BODY/RESULT_CONFLICT/RETRYABLE",
+          "CHECK",
+          "可查询处理原因"
+        ],
+        [
+          "reason_code",
+          "varchar(64)",
+          "非空",
+          "安全错误码",
+          "无",
+          "错误结果可查"
+        ],
+        [
+          "receipt_id",
+          "uuid",
+          "可空",
+          "关联可信收款",
+          "FK receipts",
+          "无可信资金时空"
+        ],
+        [
+          "refund_attempt_id",
+          "uuid",
+          "可空",
+          "关联退款尝试",
+          "FK refund_attempts",
+          "与通知类型匹配"
+        ],
+        [
+          "received_at",
+          "timestamptz",
+          "非空",
+          "首次接收业务时间",
+          "索引(kind,received_at,id)",
+          "记录接收与裁决区别"
+        ],
+        [
+          "processed_at",
+          "timestamptz",
+          "可空",
+          "业务处理完成时间",
+          "无",
+          "失败/待重试可解释"
+        ]
+      ],
+      "checks": "无效通知也持久化（请求体最大64KiB，只留安全摘要）；基础设施写库失败返回5xx要求重试，不回复已处理。该表不能由业务角色删除。"
+    },
+    {
+      "name": "auth_nonces",
+      "purpose": "HMAC防重放窗口记录；商城与mock各自存一份同结构",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "接收记录ID",
+          "主键",
+          "稳定"
+        ],
+        [
+          "key_id",
+          "varchar(40)",
+          "非空",
+          "配置中已知签名方向密钥ID，不是密钥值",
+          "唯一键组成",
+          "未知key_id拒绝"
+        ],
+        [
+          "nonce",
+          "varchar(64)",
+          "非空",
+          "16..64随机安全ASCII",
+          "唯一(key_id,nonce)",
+          "并发重复只一条受理"
+        ],
+        [
+          "expires_at",
+          "timestamptz",
+          "非空",
+          "真实时间窗口至少600秒后可清理",
+          "索引",
+          "时效窗口内不得提前清理"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "真实服务端时间",
+          "无",
+          "业务教学时钟不影响"
+        ]
+      ],
+      "checks": "只有HMAC验证正确后才能占nonce，避免伪造请求污染；重复nonce返回401 REPLAYED_SIGNATURE，仍保留商城通知接收记录。渠道重投用新nonce同event_id；资金幂等另按交易/退款号。商城与mock分别用自己的auth_nonces表，隔离账户不能互写。"
+    },
+    {
+      "name": "refund_applications",
+      "purpose": "历次买家整单退款申请及一次性审核",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "申请ID",
+          "主键",
+          "拒绝后重提新ID"
+        ],
+        [
+          "order_id",
+          "uuid",
+          "非空",
+          "订单",
+          "FK orders",
+          "只限已付未发货"
+        ],
+        [
+          "buyer_id",
+          "uuid",
+          "非空",
+          "申请人",
+          "FK accounts",
+          "必须订单本人"
+        ],
+        [
+          "reason",
+          "varchar(500)",
+          "非空",
+          "申请原因1–500字符",
+          "无",
+          "空白拒绝"
+        ],
+        [
+          "status",
+          "varchar(16)",
+          "非空，PENDING",
+          "PENDING/APPROVED/REJECTED",
+          "CHECK",
+          "审核结论不可反转"
+        ],
+        [
+          "reviewer_id",
+          "uuid",
+          "可空",
+          "审核客服",
+          "FK accounts",
+          "审核后必填SUPPORT"
+        ],
+        [
+          "review_reason",
+          "varchar(500)",
+          "可空",
+          "同意/拒绝原因",
+          "无",
+          "审核时必填"
+        ],
+        [
+          "reviewed_at",
+          "timestamptz",
+          "可空",
+          "审核业务时间",
+          "无",
+          "重复不覆盖"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "申请业务时间",
+          "索引(order_id,created_at,id)",
+          "历史保留"
+        ]
+      ],
+      "checks": "部分唯一索引order_id WHERE status=PENDING；批准后订单状态和active_application_id继续防止再申请；拒绝后解除活动指针，申请记录保留。不提供买家撤回（A06待审）。"
+    },
+    {
+      "name": "refunds",
+      "purpose": "每笔收款最多一笔整额逻辑退款，不等于每次渠道请求",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "逻辑退款ID",
+          "主键",
+          "重复发起返回本退款"
+        ],
+        [
+          "receipt_id",
+          "uuid",
+          "非空",
+          "可信实际收款",
+          "唯一FK receipts",
+          "防重复整笔退款"
+        ],
+        [
+          "order_id",
+          "uuid",
+          "可空",
+          "订单",
+          "FK orders",
+          "未知订单异常退款可空"
+        ],
+        [
+          "application_id",
+          "uuid",
+          "可空",
+          "普通售前已批准申请",
+          "唯一FK refund_applications",
+          "NORMAL必填"
+        ],
+        [
+          "anomaly_id",
+          "uuid",
+          "可空",
+          "异常款项核实记录",
+          "FK payment_anomalies",
+          "EXCEPTION必填"
+        ],
+        [
+          "kind",
+          "varchar(16)",
+          "非空",
+          "NORMAL/EXCEPTION",
+          "CHECK",
+          "库存动作必须按类型"
+        ],
+        [
+          "amount_cents",
+          "bigint",
+          "非空",
+          "对应收款全额",
+          "CHECK>0",
+          "等于可信收款金额且成功累计不超收款"
+        ],
+        [
+          "status",
+          "varchar(16)",
+          "非空，READY",
+          "READY/PROCESSING/UNKNOWN/FAILED/SUCCEEDED",
+          "CHECK",
+          "失败与未知分离"
+        ],
+        [
+          "current_attempt_id",
+          "uuid",
+          "可空",
+          "当前尝试",
+          "FK refund_attempts",
+          "与状态同事务"
+        ],
+        [
+          "created_by",
+          "uuid",
+          "非空",
+          "审核/发起客服",
+          "FK accounts",
+          "不能买家直接生成"
+        ],
+        [
+          "success_at",
+          "timestamptz",
+          "可空",
+          "首次可信成功结算时间",
+          "无",
+          "成功不倒退"
+        ],
+        [
+          "settled_at",
+          "timestamptz",
+          "可空",
+          "本地退款/库存结算完成时间",
+          "无",
+          "和成功记账同一事务"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "索引(status,created_at,id)",
+          "可待办恢复"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "无",
+          "一致"
+        ]
+      ],
+      "checks": "EXCEPTION永不操作库存，保持原关闭订单状态。SUCCEEDED必须settled_at非空；同事务完成款项结果、库存、订单、异常收尾。不同尝试不能让整笔退款多计。"
+    },
+    {
+      "name": "refund_attempts",
+      "purpose": "渠道尝试编号与终态证据；未知沿用原键查询",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "尝试ID",
+          "主键",
+          "与逻辑退款分离"
+        ],
+        [
+          "refund_id",
+          "uuid",
+          "非空",
+          "逻辑退款",
+          "FK refunds",
+          "存在性"
+        ],
+        [
+          "attempt_no",
+          "integer",
+          "非空",
+          "从1递增",
+          "唯一(refund_id,attempt_no)",
+          "并发重试不创建两条"
+        ],
+        [
+          "provider_request_id",
+          "varchar(80)",
+          "非空",
+          "渠道请求幂等键",
+          "唯一",
+          "网络重发沿用，明确失败才新尝试"
+        ],
+        [
+          "provider_refund_id",
+          "varchar(80)",
+          "可空",
+          "渠道退款号",
+          "唯一（非空）",
+          "回报精确匹配"
+        ],
+        [
+          "status",
+          "varchar(16)",
+          "非空，READY",
+          "READY/PROCESSING/UNKNOWN/FAILED/SUCCEEDED",
+          "CHECK",
+          "未知不能转READY盲重发"
+        ],
+        [
+          "failure_code",
+          "varchar(64)",
+          "可空",
+          "渠道明确失败/网络错误原因",
+          "无",
+          "HTTP超时不当FAILED"
+        ],
+        [
+          "proof_redacted",
+          "jsonb",
+          "非空，{}",
+          "可信查询/通知摘要",
+          "无",
+          "终态冲突留异常"
+        ],
+        [
+          "sent_at",
+          "timestamptz",
+          "可空",
+          "首次发送时间",
+          "无",
+          "发送前先持久化"
+        ],
+        [
+          "resolved_at",
+          "timestamptz",
+          "可空",
+          "可信终态时间",
+          "无",
+          "失败终态可验证"
+        ],
+        [
+          "last_queried_at",
+          "timestamptz",
+          "可空",
+          "最后查询时间",
+          "无",
+          "未知可恢复跟进"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "索引(refund_id,created_at,id)",
+          "历史不覆盖"
+        ]
+      ],
+      "checks": "部分唯一索引refund_id WHERE status IN(READY,PROCESSING,UNKNOWN)。模拟渠道对同请求键终态不可反转；旧失败尝试的矛盾成功不直接驱动新付款/库存，先冻结并可信核实。"
+    },
+    {
+      "name": "shipments",
+      "purpose": "人工一次发货登记；不实现物流跟踪/签收",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "发货ID",
+          "主键",
+          "唯一"
+        ],
+        [
+          "order_id",
+          "uuid",
+          "非空",
+          "订单",
+          "唯一FK orders",
+          "最多一条"
+        ],
+        [
+          "carrier",
+          "varchar(80)",
+          "非空",
+          "承运方1–80字符",
+          "无",
+          "空白拒绝"
+        ],
+        [
+          "tracking_no",
+          "varchar(80)",
+          "非空",
+          "运单1–80字符，禁止控制字符",
+          "无",
+          "不全局唯一，不能误拦合法承运方单号"
+        ],
+        [
+          "operator_id",
+          "uuid",
+          "非空",
+          "仓库操作人",
+          "FK accounts",
+          "WAREHOUSE"
+        ],
+        [
+          "shipped_at",
+          "timestamptz",
+          "非空",
+          "登记业务时间",
+          "无",
+          "与订单同事务"
+        ]
+      ],
+      "checks": "校验待发货且无活动退款；锁内提交shipments、订单状态与库存SHIP流水；并发退款/发货仅一方成功。"
+    },
+    {
+      "name": "payment_anomalies",
+      "purpose": "异常持久待办；不能靠修改订单消除",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "异常ID",
+          "主键",
+          "不删除"
+        ],
+        [
+          "type",
+          "varchar(32)",
+          "非空",
+          "LATE_PAYMENT/INVALID_SIGNATURE/AMOUNT_MISMATCH/UNKNOWN_ORDER/TXN_CONFLICT/EXTRA_PAYMENT/REFUND_RESULT_CONFLICT/INVALID_BODY",
+          "CHECK",
+          "分类可筛选"
+        ],
+        [
+          "dedupe_key",
+          "varchar(160)",
+          "非空",
+          "按异常类型及业务事实去重",
+          "唯一",
+          "重复通知不造多个处理退款"
+        ],
+        [
+          "order_id",
+          "uuid",
+          "可空",
+          "可核实订单",
+          "FK orders",
+          "未知可空"
+        ],
+        [
+          "receipt_id",
+          "uuid",
+          "可空",
+          "可信收款",
+          "FK receipts",
+          "未核实可空"
+        ],
+        [
+          "refund_id",
+          "uuid",
+          "可空",
+          "关联退款",
+          "FK refunds",
+          "冲突可定位"
+        ],
+        [
+          "first_notification_id",
+          "uuid",
+          "可空",
+          "首次证据",
+          "FK channel_notifications",
+          "可回查"
+        ],
+        [
+          "status",
+          "varchar(24)",
+          "非空，OPEN",
+          "OPEN/VERIFIED/REFUNDING/RESOLVED",
+          "CHECK",
+          "只能合法动作推进"
+        ],
+        [
+          "verification",
+          "varchar(24)",
+          "非空，UNVERIFIED",
+          "UNVERIFIED/FUNDS_CONFIRMED/NO_FUNDS/CONFLICT",
+          "CHECK",
+          "不能手填金额伪造实收"
+        ],
+        [
+          "summary",
+          "varchar(500)",
+          "非空",
+          "安全摘要",
+          "无",
+          "敏感内容不入摘要"
+        ],
+        [
+          "resolved_reason",
+          "varchar(500)",
+          "可空",
+          "结案原因/证据说明",
+          "无",
+          "有实际款项未退不能结案"
+        ],
+        [
+          "resolved_by",
+          "uuid",
+          "可空",
+          "结案客服",
+          "FK accounts",
+          "系统成功可沿用原发起人并标系统事件"
+        ],
+        [
+          "resolved_at",
+          "timestamptz",
+          "可空",
+          "结案业务时间",
+          "无",
+          "已处理仍可查询"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "索引(status,type,created_at,id)",
+          "活动列表"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "无",
+          "保留处理轨迹"
+        ]
+      ],
+      "checks": "无可信订单/金额来源的伪造通知只能记录调查与查询结果，不给任意外部交易退款。异常退款仅允许模拟渠道确认本商城merchant_ref且对应真实交易，金额取渠道事实。"
+    },
+    {
+      "name": "anomaly_actions",
+      "purpose": "客服每次核查及系统退款收尾历史",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "记录ID",
+          "主键",
+          "追加式"
+        ],
+        [
+          "anomaly_id",
+          "uuid",
+          "非空",
+          "异常",
+          "FK payment_anomalies",
+          "关联必须存在"
+        ],
+        [
+          "actor_id",
+          "uuid",
+          "可空",
+          "客服账号/系统",
+          "FK accounts",
+          "系统动作明确标识"
+        ],
+        [
+          "action",
+          "varchar(24)",
+          "非空",
+          "QUERY/VERIFY/REQUEST_REFUND/RETRY/RESOLVE/CONFLICT",
+          "CHECK",
+          "禁止通用任意改状态"
+        ],
+        [
+          "reason",
+          "varchar(500)",
+          "非空",
+          "1–500字符",
+          "无",
+          "客服动作原因必填"
+        ],
+        [
+          "evidence_redacted",
+          "jsonb",
+          "非空，{}",
+          "核查请求/响应摘要和request_id",
+          "无",
+          "不含密钥"
+        ],
+        [
+          "from_status",
+          "varchar(24)",
+          "非空",
+          "动作前状态",
+          "无",
+          "与事实对应"
+        ],
+        [
+          "to_status",
+          "varchar(24)",
+          "非空",
+          "动作后状态",
+          "无",
+          "合法转换"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "索引(anomaly_id,created_at,id)",
+          "可顺序追溯"
+        ]
+      ],
+      "checks": "资金未核实/退款未知时不得RESOLVED；退款成功由受控结算动作收尾，原异常和历史不消失。"
+    },
+    {
+      "name": "idempotency_records",
+      "purpose": "所有业务写请求去重，不能只靠页面防重",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "记录ID",
+          "主键",
+          "唯一"
+        ],
+        [
+          "actor_id",
+          "uuid",
+          "非空",
+          "可信账号",
+          "FK accounts",
+          "系统/渠道不用人类请求键"
+        ],
+        [
+          "operation",
+          "varchar(80)",
+          "非空",
+          "HTTP method+规范化路由/对象",
+          "唯一键组成",
+          "跨接口不混用"
+        ],
+        [
+          "request_key",
+          "varchar(64)",
+          "非空",
+          "Idempotency-Key，16–64 ASCII字符",
+          "唯一(actor_id,operation,request_key)",
+          "同键换参409"
+        ],
+        [
+          "request_hash",
+          "char(64)",
+          "非空",
+          "规范化body和对象ID哈希",
+          "无",
+          "身份来自服务端"
+        ],
+        [
+          "resource_type",
+          "varchar(32)",
+          "非空",
+          "订单/退款等结果类型",
+          "无",
+          "可重读当前资源"
+        ],
+        [
+          "resource_id",
+          "uuid",
+          "非空",
+          "业务资源ID",
+          "由服务校验关联",
+          "提交成功后能回读"
+        ],
+        [
+          "http_status",
+          "smallint",
+          "非空",
+          "首次成功2xx响应码",
+          "CHECK 200..299",
+          "重试返回原资源及replayed=true"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "真实服务端时间",
+          "无",
+          "业务生命周期内不清理"
+        ]
+      ],
+      "checks": "同一数据库事务写入资源和幂等记录；并发同键通过唯一约束+整事务回滚重读，不能先扣库存再忽略冲突。业务拒绝不缓存为成功；事务提交成功响应丢失可恢复。登录/登出/渠道通知不使用该人类幂等表。"
+    },
+    {
+      "name": "outbox_jobs",
+      "purpose": "数据库可靠任务，覆盖批准后未发送及崩溃恢复",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "任务ID",
+          "主键",
+          "唯一"
+        ],
+        [
+          "job_key",
+          "varchar(160)",
+          "非空",
+          "稳定业务动作键",
+          "唯一",
+          "防重复任务"
+        ],
+        [
+          "kind",
+          "varchar(24)",
+          "非空",
+          "PAYMENT_SEND/REFUND_SEND/PAYMENT_QUERY/REFUND_QUERY",
+          "CHECK",
+          "只白名单处理器"
+        ],
+        [
+          "aggregate_id",
+          "uuid",
+          "非空",
+          "意图/尝试ID",
+          "按kind服务校验",
+          "不存任意执行指令"
+        ],
+        [
+          "status",
+          "varchar(16)",
+          "非空，READY",
+          "READY/RUNNING/DONE/RETRY",
+          "CHECK",
+          "可恢复"
+        ],
+        [
+          "attempt_count",
+          "integer",
+          "非空，0",
+          "投递次数非负",
+          "CHECK>=0",
+          "有上限告警，不静默丢弃"
+        ],
+        [
+          "next_run_at",
+          "timestamptz",
+          "非空",
+          "真实调度时间",
+          "索引(status,next_run_at)",
+          "不受业务时钟回拨"
+        ],
+        [
+          "lease_until",
+          "timestamptz",
+          "可空",
+          "真实租约到期",
+          "无",
+          "崩溃过期可认领"
+        ],
+        [
+          "last_error_code",
+          "varchar(64)",
+          "可空",
+          "安全失败原因",
+          "无",
+          "不含连接串"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "真实时间",
+          "无",
+          "同业务事务入库"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "真实时间",
+          "无",
+          "恢复可追溯"
+        ]
+      ],
+      "checks": "任务租约领取事务与HTTP调用分离；调用外部时不得持有订单/商品行锁。超时重投同provider_request_id，只能查询或幂等重放同一请求，不建立新逻辑退款。"
+    },
+    {
+      "name": "audit_events",
+      "purpose": "商品维护及跨对象业务操作历史",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "审计ID",
+          "主键",
+          "追加式"
+        ],
+        [
+          "actor_id",
+          "uuid",
+          "可空",
+          "账号；系统/渠道可空",
+          "FK accounts",
+          "身份可信"
+        ],
+        [
+          "actor_kind",
+          "varchar(16)",
+          "非空",
+          "USER/SYSTEM/CHANNEL",
+          "CHECK",
+          "不得客户端任填"
+        ],
+        [
+          "entity_type",
+          "varchar(32)",
+          "非空",
+          "PRODUCT/ORDER/PAYMENT/REFUND/SHIPMENT/ANOMALY",
+          "CHECK",
+          "可联查"
+        ],
+        [
+          "entity_id",
+          "uuid",
+          "可空",
+          "可定位对象",
+          "按类型服务校验",
+          "未知对象可空"
+        ],
+        [
+          "action",
+          "varchar(64)",
+          "非空",
+          "固定业务动作码",
+          "无",
+          "不接受任意SQL或状态改写"
+        ],
+        [
+          "request_id",
+          "uuid",
+          "非空",
+          "服务端关联ID",
+          "索引",
+          "与HTTP响应关联"
+        ],
+        [
+          "before_redacted",
+          "jsonb",
+          "非空，{}",
+          "变更前关键值",
+          "无",
+          "脱敏"
+        ],
+        [
+          "after_redacted",
+          "jsonb",
+          "非空，{}",
+          "变更后关键值",
+          "无",
+          "可解释状态/金额/库存"
+        ],
+        [
+          "reason",
+          "varchar(500)",
+          "非空",
+          "操作理由或系统原因",
+          "无",
+          "商品维护、审核、异常需原因"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "索引(entity_type,entity_id,created_at,id)",
+          "留历史"
+        ]
+      ],
+      "checks": "成功变更审计与业务同事务；拒绝/异常通知另存接收或安全事件，事务回滚不能顺带抹掉应保存的异常。"
+    },
+    {
+      "name": "demo_clock",
+      "purpose": "仅教学模式的统一持久化时钟；真实模式不依赖该表",
+      "fields": [
+        [
+          "id",
+          "smallint",
+          "非空，1",
+          "唯一单行，固定1",
+          "主键及CHECK=1",
+          "禁止插第二行/删除后默默归零"
+        ],
+        [
+          "offset_seconds",
+          "bigint",
+          "非空，0",
+          "相对真实UTC的非负偏移",
+          "CHECK>=0",
+          "只前进，重启不归零"
+        ],
+        [
+          "version",
+          "bigint",
+          "非空，0",
+          "每次推进递增",
+          "并发条件更新",
+          "并发推进不丢更新"
+        ],
+        [
+          "updated_by",
+          "varchar(80)",
+          "非空",
+          "独立admin凭证的安全标识，非令牌值",
+          "无",
+          "不可由body伪造"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "真实UTC",
+          "无",
+          "不使用已偏移业务时间"
+        ]
+      ],
+      "checks": "建议教学模式business_now=real_now+持久化offset；商城与mock均从相同ClockProvider取得偏移。mock通过固定HMAC GET /internal/demo/clock读取偏移后按同一算法取时；操作前刷新，不信客户端时间。不持锁发HTTP。测试注入同一Clock接口而不改业务判定。真实模式无需推进，默认10分钟。"
+    },
+    {
+      "name": "mock.channel_payments",
+      "purpose": "模拟渠道独立存储，不能直接写商城表",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "渠道内部ID",
+          "主键",
+          "独立数据库/独立schema账户"
+        ],
+        [
+          "merchant_ref",
+          "varchar(40)",
+          "非空",
+          "配置的教学商城标识",
+          "唯一键组成",
+          "跨商户请求拒绝"
+        ],
+        [
+          "request_id",
+          "varchar(80)",
+          "非空",
+          "商城支付幂等键",
+          "唯一(merchant_ref,request_id)",
+          "同键换参409"
+        ],
+        [
+          "order_ref",
+          "varchar(80)",
+          "非空",
+          "商城订单引用",
+          "不可变",
+          "查询返回原值"
+        ],
+        [
+          "txn_id",
+          "varchar(80)",
+          "非空",
+          "渠道交易号",
+          "唯一",
+          "不同请求也不重复"
+        ],
+        [
+          "amount_cents",
+          "bigint",
+          "非空",
+          "正整数人民币分",
+          "CHECK>0",
+          "超范围拒绝"
+        ],
+        [
+          "currency",
+          "char(3)",
+          "非空，CNY",
+          "币种",
+          "CHECK=CNY",
+          "不支持币种拒绝"
+        ],
+        [
+          "status",
+          "varchar(16)",
+          "非空",
+          "PENDING/SUCCEEDED/FAILED",
+          "CHECK",
+          "终态不可反转"
+        ],
+        [
+          "paid_at",
+          "timestamptz",
+          "可空",
+          "成功业务时间",
+          "无",
+          "成功必填"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "无",
+          "持久化"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "无",
+          "重启可查"
+        ]
+      ],
+      "checks": "渠道HTTP超时可以在已成功扣款后隐藏响应；可信查询仍返回真实终态。教学业务时间与商城统一，不采用渠道时间决定订单有效性。"
+    },
+    {
+      "name": "mock.channel_refunds",
+      "purpose": "每次商城退款尝试的稳定渠道结果",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "内部ID",
+          "主键",
+          "稳定"
+        ],
+        [
+          "merchant_ref",
+          "varchar(40)",
+          "非空",
+          "商城标识",
+          "联合唯一组成",
+          "身份绑定"
+        ],
+        [
+          "request_id",
+          "varchar(80)",
+          "非空",
+          "商城退款尝试幂等键",
+          "唯一(merchant_ref,request_id)",
+          "重发不重复实退"
+        ],
+        [
+          "txn_id",
+          "varchar(80)",
+          "非空",
+          "原成功交易",
+          "FK channel_payments.txn_id",
+          "只退本商户收款"
+        ],
+        [
+          "refund_id",
+          "varchar(80)",
+          "非空",
+          "渠道退款号",
+          "唯一",
+          "通知与查询同号"
+        ],
+        [
+          "amount_cents",
+          "bigint",
+          "非空",
+          "整笔真实金额",
+          "CHECK>0",
+          "成功实退累计不得超过原收款"
+        ],
+        [
+          "status",
+          "varchar(16)",
+          "非空",
+          "PENDING/SUCCEEDED/FAILED",
+          "CHECK",
+          "明确失败不能事后变成功"
+        ],
+        [
+          "failure_code",
+          "varchar(64)",
+          "可空",
+          "明确失败码",
+          "无",
+          "可触发首败再成功"
+        ],
+        [
+          "refunded_at",
+          "timestamptz",
+          "可空",
+          "成功业务时间",
+          "无",
+          "成功必填"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "无",
+          "重启可查"
+        ],
+        [
+          "updated_at",
+          "timestamptz",
+          "非空",
+          "业务时间",
+          "无",
+          "同键结果稳定"
+        ]
+      ],
+      "checks": "新尝试只能在原尝试明确失败后出现；渠道也锁住原收款并校验成功累计金额，作为第二道防重退。不能把超时作为FAILED。"
+    },
+    {
+      "name": "mock.notification_jobs",
+      "purpose": "可延迟/重复投递，渠道通知可靠记录",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "任务ID",
+          "主键",
+          "稳定"
+        ],
+        [
+          "kind",
+          "varchar(16)",
+          "非空",
+          "PAYMENT/REFUND",
+          "CHECK",
+          "签名协议一致"
+        ],
+        [
+          "resource_ref",
+          "varchar(80)",
+          "非空",
+          "txn_id或refund_id",
+          "服务校验",
+          "查询得到原事实"
+        ],
+        [
+          "event_id",
+          "varchar(80)",
+          "非空",
+          "稳定事件号",
+          "唯一",
+          "重复投递用同event_id"
+        ],
+        [
+          "deliver_after",
+          "timestamptz",
+          "非空",
+          "真实调度时间",
+          "索引",
+          "显式教学延迟"
+        ],
+        [
+          "remaining_deliveries",
+          "integer",
+          "非空",
+          "0..20",
+          "CHECK",
+          "支持重复次数，上限防误发洪泛"
+        ],
+        [
+          "status",
+          "varchar(16)",
+          "非空",
+          "READY/RUNNING/DONE/RETRY",
+          "CHECK",
+          "可恢复"
+        ],
+        [
+          "lease_until",
+          "timestamptz",
+          "可空",
+          "真实租约",
+          "无",
+          "重启恢复"
+        ],
+        [
+          "last_http_status",
+          "smallint",
+          "可空",
+          "最近商城响应",
+          "无",
+          "5xx可重试"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "真实时间",
+          "无",
+          "投递轨迹"
+        ]
+      ],
+      "checks": "通知目标固定商城配置的白名单回调URL，不接受浏览器传callback_url，防SSRF；每次投递重新签名timestamp/nonce，业务event_id不变。"
+    },
+    {
+      "name": "mock.simulation_rules",
+      "purpose": "仅教学控制面可写的有限故障脚本",
+      "fields": [
+        [
+          "id",
+          "uuid",
+          "非空，生成",
+          "规则ID",
+          "主键",
+          "稳定"
+        ],
+        [
+          "target_order_ref",
+          "varchar(80)",
+          "非空",
+          "已知商城订单引用，发送前可配置",
+          "索引",
+          "只匹配明确订单，不全局污染并发"
+        ],
+        [
+          "target_request_id",
+          "varchar(80)",
+          "可空",
+          "进一步限定已知意图/尝试请求键",
+          "索引",
+          "非空时必须同时匹配"
+        ],
+        [
+          "attempt_no",
+          "integer",
+          "可空",
+          "进一步限定退款第几次尝试，>=1",
+          "CHECK",
+          "可预设首次失败第二次成功"
+        ],
+        [
+          "operation",
+          "varchar(16)",
+          "非空",
+          "PAYMENT/REFUND/NOTIFY",
+          "CHECK",
+          "白名单"
+        ],
+        [
+          "mode",
+          "varchar(32)",
+          "非空",
+          "SUCCESS/EXPLICIT_FAIL/TIMEOUT_AFTER_SUCCESS/PENDING/DELAY_NOTIFY/DUPLICATE_NOTIFY",
+          "CHECK",
+          "拒绝任意程序/URL"
+        ],
+        [
+          "delay_ms",
+          "integer",
+          "非空，0",
+          "0..600000",
+          "CHECK",
+          "教学可控上限"
+        ],
+        [
+          "repeat_count",
+          "integer",
+          "非空，1",
+          "1..20",
+          "CHECK",
+          "不影响真实业务幂等"
+        ],
+        [
+          "remaining_uses",
+          "integer",
+          "非空，1",
+          "1..20",
+          "CHECK",
+          "原子消费"
+        ],
+        [
+          "created_at",
+          "timestamptz",
+          "非空",
+          "真实时间",
+          "无",
+          "保留配置证据"
+        ]
+      ],
+      "checks": "教学控制端点须服务端教学开关+独立admin令牌；正常买家、运营、客服及仓库无权限修改模拟行为。生产模式关闭；测试采用隔离实例，不远程重置共享库。"
+    }
+  ],
+  "fieldTests": [
+    {
+      "id": "FIELD-001",
+      "table": "accounts",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "账号ID",
+      "constraint": "主键",
+      "test": "不能由请求body替代当前身份"
+    },
+    {
+      "id": "FIELD-002",
+      "table": "accounts",
+      "field": "login_name",
+      "type": "varchar(64)",
+      "nullDefault": "非空",
+      "domain": "3–64字符，仅教学账号",
+      "constraint": "唯一",
+      "test": "重复名称拒绝"
+    },
+    {
+      "id": "FIELD-003",
+      "table": "accounts",
+      "field": "password_hash",
+      "type": "text",
+      "nullDefault": "非空",
+      "domain": "Argon2id含盐哈希，禁止明文",
+      "constraint": "不得返回API",
+      "test": "校验错误密码、不泄露哈希"
+    },
+    {
+      "id": "FIELD-004",
+      "table": "accounts",
+      "field": "display_name",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "1–80字符",
+      "constraint": "无",
+      "test": "超长/空白拒绝"
+    },
+    {
+      "id": "FIELD-005",
+      "table": "accounts",
+      "field": "role",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "BUYER/OPERATOR/WAREHOUSE/SUPPORT",
+      "constraint": "CHECK枚举",
+      "test": "角色伪造拒绝"
+    },
+    {
+      "id": "FIELD-006",
+      "table": "accounts",
+      "field": "enabled",
+      "type": "boolean",
+      "nullDefault": "非空，true",
+      "domain": "停用后请求立即拒绝",
+      "constraint": "无",
+      "test": "已发token不能绕过停用"
+    },
+    {
+      "id": "FIELD-007",
+      "table": "accounts",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "UTC写入",
+      "constraint": "无",
+      "test": "返回RFC3339"
+    },
+    {
+      "id": "FIELD-008",
+      "table": "accounts",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "UTC写入",
+      "constraint": "无",
+      "test": "变更不早于创建"
+    },
+    {
+      "id": "FIELD-009",
+      "table": "sessions",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "会话ID",
+      "constraint": "主键",
+      "test": "不可预测"
+    },
+    {
+      "id": "FIELD-010",
+      "table": "sessions",
+      "field": "account_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "所属账号",
+      "constraint": "FK accounts",
+      "test": "不存在账号拒绝"
+    },
+    {
+      "id": "FIELD-011",
+      "table": "sessions",
+      "field": "token_hash",
+      "type": "char(64)",
+      "nullDefault": "非空",
+      "domain": "随机256位令牌SHA256",
+      "constraint": "唯一",
+      "test": "仅创建时返回明文token，数据库无明文"
+    },
+    {
+      "id": "FIELD-012",
+      "table": "sessions",
+      "field": "expires_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "建议8小时会话时效",
+      "constraint": "索引",
+      "test": "到期立即401"
+    },
+    {
+      "id": "FIELD-013",
+      "table": "sessions",
+      "field": "revoked_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "登出/撤销时间",
+      "constraint": "无",
+      "test": "撤销后401"
+    },
+    {
+      "id": "FIELD-014",
+      "table": "sessions",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实服务端时间",
+      "constraint": "无",
+      "test": "不得使用业务教学时钟延长认证"
+    },
+    {
+      "id": "FIELD-015",
+      "table": "products",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "商品ID",
+      "constraint": "主键",
+      "test": "固定两商品"
+    },
+    {
+      "id": "FIELD-016",
+      "table": "products",
+      "field": "sku",
+      "type": "varchar(32)",
+      "nullDefault": "非空",
+      "domain": "教学商品编码",
+      "constraint": "唯一",
+      "test": "重复拒绝"
+    },
+    {
+      "id": "FIELD-017",
+      "table": "products",
+      "field": "name",
+      "type": "varchar(120)",
+      "nullDefault": "非空",
+      "domain": "去首尾空白后1–120字符",
+      "constraint": "无",
+      "test": "空白/超长拒绝"
+    },
+    {
+      "id": "FIELD-018",
+      "table": "products",
+      "field": "unit_price_cents",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "1..1000000000，人民币分",
+      "constraint": "CHECK",
+      "test": "零、负、小数、溢出拒绝"
+    },
+    {
+      "id": "FIELD-019",
+      "table": "products",
+      "field": "sale_status",
+      "type": "varchar(16)",
+      "nullDefault": "非空，OFF_SHELF",
+      "domain": "ON_SHELF/OFF_SHELF",
+      "constraint": "CHECK",
+      "test": "枚举外拒绝"
+    },
+    {
+      "id": "FIELD-020",
+      "table": "products",
+      "field": "initial_quantity",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "0..1000000，种子后不可改",
+      "constraint": "CHECK",
+      "test": "运营不能修改初始基数"
+    },
+    {
+      "id": "FIELD-021",
+      "table": "products",
+      "field": "available_quantity",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "0..1000000",
+      "constraint": "CHECK非负",
+      "test": "下单/调整竞争不负数"
+    },
+    {
+      "id": "FIELD-022",
+      "table": "products",
+      "field": "reserved_quantity",
+      "type": "bigint",
+      "nullDefault": "非空，0",
+      "domain": "活动订单占用",
+      "constraint": "CHECK非负",
+      "test": "与订单数量合计相等"
+    },
+    {
+      "id": "FIELD-023",
+      "table": "products",
+      "field": "shipped_quantity",
+      "type": "bigint",
+      "nullDefault": "非空，0",
+      "domain": "已出库累计",
+      "constraint": "CHECK非负",
+      "test": "每单一次出库"
+    },
+    {
+      "id": "FIELD-024",
+      "table": "products",
+      "field": "adjustment_net",
+      "type": "bigint",
+      "nullDefault": "非空，0",
+      "domain": "运营调整净额，可负",
+      "constraint": "守恒CHECK",
+      "test": "初始+净额=可售+占用+出库"
+    },
+    {
+      "id": "FIELD-025",
+      "table": "products",
+      "field": "version",
+      "type": "bigint",
+      "nullDefault": "非空，0",
+      "domain": "每次商品/库存变化递增",
+      "constraint": "乐观锁",
+      "test": "旧version修改返回409"
+    },
+    {
+      "id": "FIELD-026",
+      "table": "products",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "创建UTC",
+      "constraint": "无",
+      "test": "稳定"
+    },
+    {
+      "id": "FIELD-027",
+      "table": "products",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "更新UTC",
+      "constraint": "无",
+      "test": "同事务更新"
+    },
+    {
+      "id": "FIELD-028",
+      "table": "orders",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "订单ID",
+      "constraint": "主键",
+      "test": "全链关联"
+    },
+    {
+      "id": "FIELD-029",
+      "table": "orders",
+      "field": "order_no",
+      "type": "varchar(40)",
+      "nullDefault": "非空",
+      "domain": "不含个人信息的展示单号",
+      "constraint": "唯一",
+      "test": "不以可猜单号代替权限"
+    },
+    {
+      "id": "FIELD-030",
+      "table": "orders",
+      "field": "buyer_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "下单账号",
+      "constraint": "FK accounts",
+      "test": "必须BUYER且由会话注入"
+    },
+    {
+      "id": "FIELD-031",
+      "table": "orders",
+      "field": "product_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "商品ID",
+      "constraint": "FK products",
+      "test": "不可换商品"
+    },
+    {
+      "id": "FIELD-032",
+      "table": "orders",
+      "field": "sku_snapshot",
+      "type": "varchar(32)",
+      "nullDefault": "非空",
+      "domain": "创建时SKU",
+      "constraint": "不可变",
+      "test": "后续商品变化不改"
+    },
+    {
+      "id": "FIELD-033",
+      "table": "orders",
+      "field": "name_snapshot",
+      "type": "varchar(120)",
+      "nullDefault": "非空",
+      "domain": "创建时名称",
+      "constraint": "不可变",
+      "test": "调名不改"
+    },
+    {
+      "id": "FIELD-034",
+      "table": "orders",
+      "field": "unit_price_cents",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "创建时价格分",
+      "constraint": "CHECK >0",
+      "test": "客户端价格不能覆盖"
+    },
+    {
+      "id": "FIELD-035",
+      "table": "orders",
+      "field": "quantity",
+      "type": "smallint",
+      "nullDefault": "非空",
+      "domain": "1或2",
+      "constraint": "CHECK IN(1,2)",
+      "test": "0/3/负/小数拒绝"
+    },
+    {
+      "id": "FIELD-036",
+      "table": "orders",
+      "field": "amount_cents",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "快照单价乘数量",
+      "constraint": "CHECK等式",
+      "test": "旧价付款；溢出前检查"
+    },
+    {
+      "id": "FIELD-037",
+      "table": "orders",
+      "field": "status",
+      "type": "varchar(24)",
+      "nullDefault": "非空，PENDING_PAYMENT",
+      "domain": "七主状态见业务约束",
+      "constraint": "CHECK",
+      "test": "禁止任意PATCH状态"
+    },
+    {
+      "id": "FIELD-038",
+      "table": "orders",
+      "field": "normal_receipt_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "唯一正常付款",
+      "constraint": "唯一FK receipts",
+      "test": "一个正常付款只履约一次"
+    },
+    {
+      "id": "FIELD-039",
+      "table": "orders",
+      "field": "active_application_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "当前未拒绝/未结束退款申请",
+      "constraint": "FK refund_applications",
+      "test": "同一时刻一个活动申请"
+    },
+    {
+      "id": "FIELD-040",
+      "table": "orders",
+      "field": "close_reason",
+      "type": "varchar(24)",
+      "nullDefault": "可空",
+      "domain": "BUYER_CANCELLED/TIMEOUT",
+      "constraint": "CHECK状态配套",
+      "test": "关闭必须有原因"
+    },
+    {
+      "id": "FIELD-041",
+      "table": "orders",
+      "field": "expires_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "创建业务时间+10分钟",
+      "constraint": "索引(status,expires_at)",
+      "test": "恰好截止过期"
+    },
+    {
+      "id": "FIELD-042",
+      "table": "orders",
+      "field": "paid_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "商城确认正常支付时间",
+      "constraint": "无",
+      "test": "渠道时间不能代替"
+    },
+    {
+      "id": "FIELD-043",
+      "table": "orders",
+      "field": "closed_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "首次关闭时间",
+      "constraint": "无",
+      "test": "重复关闭不覆盖"
+    },
+    {
+      "id": "FIELD-044",
+      "table": "orders",
+      "field": "refunded_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "普通退款首次结算时间",
+      "constraint": "无",
+      "test": "异常退款不改订单为已退款"
+    },
+    {
+      "id": "FIELD-045",
+      "table": "orders",
+      "field": "shipped_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "发货时间",
+      "constraint": "无",
+      "test": "与shipments一致"
+    },
+    {
+      "id": "FIELD-046",
+      "table": "orders",
+      "field": "version",
+      "type": "bigint",
+      "nullDefault": "非空，0",
+      "domain": "状态变更递增",
+      "constraint": "无",
+      "test": "竞争裁决可追溯"
+    },
+    {
+      "id": "FIELD-047",
+      "table": "orders",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "创建业务时间",
+      "constraint": "索引(buyer_id,created_at,id)",
+      "test": "排序稳定"
+    },
+    {
+      "id": "FIELD-048",
+      "table": "orders",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "更新业务时间",
+      "constraint": "无",
+      "test": "同事务更新"
+    },
+    {
+      "id": "FIELD-049",
+      "table": "inventory_ledger",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "流水ID",
+      "constraint": "主键",
+      "test": "唯一"
+    },
+    {
+      "id": "FIELD-050",
+      "table": "inventory_ledger",
+      "field": "product_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "关联商品",
+      "constraint": "FK products",
+      "test": "不存在拒绝"
+    },
+    {
+      "id": "FIELD-051",
+      "table": "inventory_ledger",
+      "field": "order_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "占用/释放/发货关联订单",
+      "constraint": "FK orders",
+      "test": "ADJUST可空，其余必填"
+    },
+    {
+      "id": "FIELD-052",
+      "table": "inventory_ledger",
+      "field": "refund_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "普通退款释放关联退款",
+      "constraint": "FK refunds",
+      "test": "退款释放必须可追溯"
+    },
+    {
+      "id": "FIELD-053",
+      "table": "inventory_ledger",
+      "field": "actor_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "操作人，系统关闭可空",
+      "constraint": "FK accounts",
+      "test": "非系统调整必填"
+    },
+    {
+      "id": "FIELD-054",
+      "table": "inventory_ledger",
+      "field": "event_type",
+      "type": "varchar(24)",
+      "nullDefault": "非空",
+      "domain": "RESERVE/CLOSE_RELEASE/REFUND_RELEASE/SHIP/ADJUST",
+      "constraint": "CHECK",
+      "test": "迟到退款无库存事件"
+    },
+    {
+      "id": "FIELD-055",
+      "table": "inventory_ledger",
+      "field": "event_key",
+      "type": "varchar(120)",
+      "nullDefault": "非空",
+      "domain": "订单动作唯一键或调整请求键",
+      "constraint": "唯一",
+      "test": "同动作重放不多生效"
+    },
+    {
+      "id": "FIELD-056",
+      "table": "inventory_ledger",
+      "field": "delta_available",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "可售变化",
+      "constraint": "CHECK事件向量",
+      "test": "占用-q，释放+q"
+    },
+    {
+      "id": "FIELD-057",
+      "table": "inventory_ledger",
+      "field": "delta_reserved",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "占用变化",
+      "constraint": "CHECK事件向量",
+      "test": "占用+q，释放/出库-q"
+    },
+    {
+      "id": "FIELD-058",
+      "table": "inventory_ledger",
+      "field": "delta_shipped",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "出库变化",
+      "constraint": "CHECK事件向量",
+      "test": "仅SHIP为+q"
+    },
+    {
+      "id": "FIELD-059",
+      "table": "inventory_ledger",
+      "field": "delta_adjustment",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "调整净额变化",
+      "constraint": "CHECK事件向量",
+      "test": "仅ADJUST与可售同值"
+    },
+    {
+      "id": "FIELD-060",
+      "table": "inventory_ledger",
+      "field": "available_before",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "可售前值",
+      "constraint": "CHECK>=0",
+      "test": "前后值匹配"
+    },
+    {
+      "id": "FIELD-061",
+      "table": "inventory_ledger",
+      "field": "available_after",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "可售后值",
+      "constraint": "CHECK=before+delta",
+      "test": "不负数"
+    },
+    {
+      "id": "FIELD-062",
+      "table": "inventory_ledger",
+      "field": "reserved_before",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "占用前值",
+      "constraint": "CHECK>=0",
+      "test": "与商品事务一致"
+    },
+    {
+      "id": "FIELD-063",
+      "table": "inventory_ledger",
+      "field": "reserved_after",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "占用后值",
+      "constraint": "CHECK=before+delta",
+      "test": "不负数"
+    },
+    {
+      "id": "FIELD-064",
+      "table": "inventory_ledger",
+      "field": "shipped_before",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "出库前值",
+      "constraint": "CHECK>=0",
+      "test": "与商品事务一致"
+    },
+    {
+      "id": "FIELD-065",
+      "table": "inventory_ledger",
+      "field": "shipped_after",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "出库后值",
+      "constraint": "CHECK=before+delta",
+      "test": "不负数"
+    },
+    {
+      "id": "FIELD-066",
+      "table": "inventory_ledger",
+      "field": "reason",
+      "type": "varchar(500)",
+      "nullDefault": "非空",
+      "domain": "原因1–500字符",
+      "constraint": "无",
+      "test": "调整必填，系统原因固定码说明"
+    },
+    {
+      "id": "FIELD-067",
+      "table": "inventory_ledger",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "索引(product_id,created_at,id)",
+      "test": "可重算余额"
+    },
+    {
+      "id": "FIELD-068",
+      "table": "payment_intents",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "支付意图ID",
+      "constraint": "主键",
+      "test": "重试原请求返回同一意图"
+    },
+    {
+      "id": "FIELD-069",
+      "table": "payment_intents",
+      "field": "order_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "关联订单",
+      "constraint": "FK orders",
+      "test": "必须本人有效待付款"
+    },
+    {
+      "id": "FIELD-070",
+      "table": "payment_intents",
+      "field": "provider_request_id",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "渠道支付幂等键",
+      "constraint": "唯一",
+      "test": "未知时沿用此键查询"
+    },
+    {
+      "id": "FIELD-071",
+      "table": "payment_intents",
+      "field": "amount_cents",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "订单应付快照",
+      "constraint": "CHECK >0",
+      "test": "不接受body金额"
+    },
+    {
+      "id": "FIELD-072",
+      "table": "payment_intents",
+      "field": "currency",
+      "type": "char(3)",
+      "nullDefault": "非空，CNY",
+      "domain": "币种",
+      "constraint": "CHECK=CNY",
+      "test": "其他币种拒绝"
+    },
+    {
+      "id": "FIELD-073",
+      "table": "payment_intents",
+      "field": "status",
+      "type": "varchar(24)",
+      "nullDefault": "非空，READY",
+      "domain": "READY/PENDING/SUCCEEDED/FAILED/UNKNOWN",
+      "constraint": "CHECK",
+      "test": "成功不等于已获正常履约资格"
+    },
+    {
+      "id": "FIELD-074",
+      "table": "payment_intents",
+      "field": "provider_txn_id",
+      "type": "varchar(80)",
+      "nullDefault": "可空",
+      "domain": "渠道交易ID",
+      "constraint": "索引",
+      "test": "最终以receipts唯一归属"
+    },
+    {
+      "id": "FIELD-075",
+      "table": "payment_intents",
+      "field": "failure_code",
+      "type": "varchar(64)",
+      "nullDefault": "可空",
+      "domain": "安全原因码",
+      "constraint": "无",
+      "test": "无渠道密钥/堆栈"
+    },
+    {
+      "id": "FIELD-076",
+      "table": "payment_intents",
+      "field": "last_queried_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "最后查询业务时间",
+      "constraint": "无",
+      "test": "未知可查询"
+    },
+    {
+      "id": "FIELD-077",
+      "table": "payment_intents",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "索引(order_id,created_at)",
+      "test": "保留历史"
+    },
+    {
+      "id": "FIELD-078",
+      "table": "payment_intents",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "无",
+      "test": "状态更新可追溯"
+    },
+    {
+      "id": "FIELD-079",
+      "table": "receipts",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "收款ID",
+      "constraint": "主键",
+      "test": "退款依据"
+    },
+    {
+      "id": "FIELD-080",
+      "table": "receipts",
+      "field": "provider",
+      "type": "varchar(24)",
+      "nullDefault": "非空，MOCK",
+      "domain": "渠道名",
+      "constraint": "联合唯一键组成",
+      "test": "渠道身份独立"
+    },
+    {
+      "id": "FIELD-081",
+      "table": "receipts",
+      "field": "provider_txn_id",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "渠道交易ID",
+      "constraint": "唯一(provider,provider_txn_id)",
+      "test": "跨订单重放不改归属"
+    },
+    {
+      "id": "FIELD-082",
+      "table": "receipts",
+      "field": "external_order_ref",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "渠道原始订单引用",
+      "constraint": "不可变",
+      "test": "未知订单也保留原引用"
+    },
+    {
+      "id": "FIELD-083",
+      "table": "receipts",
+      "field": "order_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "商城可核实订单",
+      "constraint": "FK orders",
+      "test": "未知订单不伪造订单"
+    },
+    {
+      "id": "FIELD-084",
+      "table": "receipts",
+      "field": "payment_intent_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "关联商城意图",
+      "constraint": "FK payment_intents",
+      "test": "外部注入可空"
+    },
+    {
+      "id": "FIELD-085",
+      "table": "receipts",
+      "field": "amount_cents",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "渠道核实实际金额",
+      "constraint": "CHECK>0",
+      "test": "金额异常仍按真实金额记录"
+    },
+    {
+      "id": "FIELD-086",
+      "table": "receipts",
+      "field": "currency",
+      "type": "char(3)",
+      "nullDefault": "非空",
+      "domain": "CNY",
+      "constraint": "CHECK=CNY",
+      "test": "不转换币种"
+    },
+    {
+      "id": "FIELD-087",
+      "table": "receipts",
+      "field": "classification",
+      "type": "varchar(24)",
+      "nullDefault": "非空",
+      "domain": "NORMAL/LATE/EXTRA/AMOUNT_MISMATCH/UNKNOWN_ORDER",
+      "constraint": "CHECK",
+      "test": "非NORMAL不能放行订单"
+    },
+    {
+      "id": "FIELD-088",
+      "table": "receipts",
+      "field": "proof_type",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "SIGNED_NOTIFY/CHANNEL_QUERY",
+      "constraint": "CHECK",
+      "test": "验签失败不建立收款"
+    },
+    {
+      "id": "FIELD-089",
+      "table": "receipts",
+      "field": "verified_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "商城完成可信核验业务时间",
+      "constraint": "无",
+      "test": "晚到分类可验证"
+    },
+    {
+      "id": "FIELD-090",
+      "table": "receipts",
+      "field": "provider_paid_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "渠道付款时间，仅证据",
+      "constraint": "无",
+      "test": "不延长有效期"
+    },
+    {
+      "id": "FIELD-091",
+      "table": "receipts",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "首次保存时间",
+      "constraint": "无",
+      "test": "重复不增加实收"
+    },
+    {
+      "id": "FIELD-092",
+      "table": "channel_notifications",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "接收记录ID",
+      "constraint": "主键",
+      "test": "重复通知也新增接收轨迹"
+    },
+    {
+      "id": "FIELD-093",
+      "table": "channel_notifications",
+      "field": "kind",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "PAYMENT/REFUND",
+      "constraint": "CHECK",
+      "test": "不同协议分开校验"
+    },
+    {
+      "id": "FIELD-094",
+      "table": "channel_notifications",
+      "field": "provider",
+      "type": "varchar(24)",
+      "nullDefault": "非空",
+      "domain": "渠道名",
+      "constraint": "无",
+      "test": "白名单"
+    },
+    {
+      "id": "FIELD-095",
+      "table": "channel_notifications",
+      "field": "provider_event_id",
+      "type": "varchar(80)",
+      "nullDefault": "可空",
+      "domain": "渠道事件ID",
+      "constraint": "非唯一索引",
+      "test": "不能只凭事件ID决定资金幂等"
+    },
+    {
+      "id": "FIELD-096",
+      "table": "channel_notifications",
+      "field": "external_order_ref",
+      "type": "varchar(80)",
+      "nullDefault": "可空",
+      "domain": "声称的订单引用",
+      "constraint": "无",
+      "test": "未核实不得信任"
+    },
+    {
+      "id": "FIELD-097",
+      "table": "channel_notifications",
+      "field": "provider_txn_id",
+      "type": "varchar(80)",
+      "nullDefault": "可空",
+      "domain": "声称交易号",
+      "constraint": "索引",
+      "test": "冲突保留"
+    },
+    {
+      "id": "FIELD-098",
+      "table": "channel_notifications",
+      "field": "provider_refund_id",
+      "type": "varchar(80)",
+      "nullDefault": "可空",
+      "domain": "声称退款号",
+      "constraint": "索引",
+      "test": "匹配attempt"
+    },
+    {
+      "id": "FIELD-099",
+      "table": "channel_notifications",
+      "field": "claimed_amount_cents",
+      "type": "bigint",
+      "nullDefault": "可空",
+      "domain": "成功解析的声称金额",
+      "constraint": "无",
+      "test": "非法负/溢出只在安全摘要记录"
+    },
+    {
+      "id": "FIELD-100",
+      "table": "channel_notifications",
+      "field": "payload_hash",
+      "type": "char(64)",
+      "nullDefault": "非空",
+      "domain": "原始请求SHA256",
+      "constraint": "无",
+      "test": "不保留密钥"
+    },
+    {
+      "id": "FIELD-101",
+      "table": "channel_notifications",
+      "field": "payload_redacted",
+      "type": "jsonb",
+      "nullDefault": "非空，{}",
+      "domain": "有上限的脱敏要点",
+      "constraint": "无",
+      "test": "脱敏不损失业务关键标识"
+    },
+    {
+      "id": "FIELD-102",
+      "table": "channel_notifications",
+      "field": "auth_valid",
+      "type": "boolean",
+      "nullDefault": "非空，false",
+      "domain": "是否通过HMAC",
+      "constraint": "无",
+      "test": "失败不改业务"
+    },
+    {
+      "id": "FIELD-103",
+      "table": "channel_notifications",
+      "field": "process_result",
+      "type": "varchar(32)",
+      "nullDefault": "非空",
+      "domain": "ACCEPTED/DUPLICATE/INVALID_SIGNATURE/REPLAYED_SIGNATURE/AMOUNT_MISMATCH/UNKNOWN_ORDER/TXN_CONFLICT/INVALID_BODY/RESULT_CONFLICT/RETRYABLE",
+      "constraint": "CHECK",
+      "test": "可查询处理原因"
+    },
+    {
+      "id": "FIELD-104",
+      "table": "channel_notifications",
+      "field": "reason_code",
+      "type": "varchar(64)",
+      "nullDefault": "非空",
+      "domain": "安全错误码",
+      "constraint": "无",
+      "test": "错误结果可查"
+    },
+    {
+      "id": "FIELD-105",
+      "table": "channel_notifications",
+      "field": "receipt_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "关联可信收款",
+      "constraint": "FK receipts",
+      "test": "无可信资金时空"
+    },
+    {
+      "id": "FIELD-106",
+      "table": "channel_notifications",
+      "field": "refund_attempt_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "关联退款尝试",
+      "constraint": "FK refund_attempts",
+      "test": "与通知类型匹配"
+    },
+    {
+      "id": "FIELD-107",
+      "table": "channel_notifications",
+      "field": "received_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "首次接收业务时间",
+      "constraint": "索引(kind,received_at,id)",
+      "test": "记录接收与裁决区别"
+    },
+    {
+      "id": "FIELD-108",
+      "table": "channel_notifications",
+      "field": "processed_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "业务处理完成时间",
+      "constraint": "无",
+      "test": "失败/待重试可解释"
+    },
+    {
+      "id": "FIELD-109",
+      "table": "auth_nonces",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "接收记录ID",
+      "constraint": "主键",
+      "test": "稳定"
+    },
+    {
+      "id": "FIELD-110",
+      "table": "auth_nonces",
+      "field": "key_id",
+      "type": "varchar(40)",
+      "nullDefault": "非空",
+      "domain": "配置中已知签名方向密钥ID，不是密钥值",
+      "constraint": "唯一键组成",
+      "test": "未知key_id拒绝"
+    },
+    {
+      "id": "FIELD-111",
+      "table": "auth_nonces",
+      "field": "nonce",
+      "type": "varchar(64)",
+      "nullDefault": "非空",
+      "domain": "16..64随机安全ASCII",
+      "constraint": "唯一(key_id,nonce)",
+      "test": "并发重复只一条受理"
+    },
+    {
+      "id": "FIELD-112",
+      "table": "auth_nonces",
+      "field": "expires_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实时间窗口至少600秒后可清理",
+      "constraint": "索引",
+      "test": "时效窗口内不得提前清理"
+    },
+    {
+      "id": "FIELD-113",
+      "table": "auth_nonces",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实服务端时间",
+      "constraint": "无",
+      "test": "业务教学时钟不影响"
+    },
+    {
+      "id": "FIELD-114",
+      "table": "refund_applications",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "申请ID",
+      "constraint": "主键",
+      "test": "拒绝后重提新ID"
+    },
+    {
+      "id": "FIELD-115",
+      "table": "refund_applications",
+      "field": "order_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "订单",
+      "constraint": "FK orders",
+      "test": "只限已付未发货"
+    },
+    {
+      "id": "FIELD-116",
+      "table": "refund_applications",
+      "field": "buyer_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "申请人",
+      "constraint": "FK accounts",
+      "test": "必须订单本人"
+    },
+    {
+      "id": "FIELD-117",
+      "table": "refund_applications",
+      "field": "reason",
+      "type": "varchar(500)",
+      "nullDefault": "非空",
+      "domain": "申请原因1–500字符",
+      "constraint": "无",
+      "test": "空白拒绝"
+    },
+    {
+      "id": "FIELD-118",
+      "table": "refund_applications",
+      "field": "status",
+      "type": "varchar(16)",
+      "nullDefault": "非空，PENDING",
+      "domain": "PENDING/APPROVED/REJECTED",
+      "constraint": "CHECK",
+      "test": "审核结论不可反转"
+    },
+    {
+      "id": "FIELD-119",
+      "table": "refund_applications",
+      "field": "reviewer_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "审核客服",
+      "constraint": "FK accounts",
+      "test": "审核后必填SUPPORT"
+    },
+    {
+      "id": "FIELD-120",
+      "table": "refund_applications",
+      "field": "review_reason",
+      "type": "varchar(500)",
+      "nullDefault": "可空",
+      "domain": "同意/拒绝原因",
+      "constraint": "无",
+      "test": "审核时必填"
+    },
+    {
+      "id": "FIELD-121",
+      "table": "refund_applications",
+      "field": "reviewed_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "审核业务时间",
+      "constraint": "无",
+      "test": "重复不覆盖"
+    },
+    {
+      "id": "FIELD-122",
+      "table": "refund_applications",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "申请业务时间",
+      "constraint": "索引(order_id,created_at,id)",
+      "test": "历史保留"
+    },
+    {
+      "id": "FIELD-123",
+      "table": "refunds",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "逻辑退款ID",
+      "constraint": "主键",
+      "test": "重复发起返回本退款"
+    },
+    {
+      "id": "FIELD-124",
+      "table": "refunds",
+      "field": "receipt_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "可信实际收款",
+      "constraint": "唯一FK receipts",
+      "test": "防重复整笔退款"
+    },
+    {
+      "id": "FIELD-125",
+      "table": "refunds",
+      "field": "order_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "订单",
+      "constraint": "FK orders",
+      "test": "未知订单异常退款可空"
+    },
+    {
+      "id": "FIELD-126",
+      "table": "refunds",
+      "field": "application_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "普通售前已批准申请",
+      "constraint": "唯一FK refund_applications",
+      "test": "NORMAL必填"
+    },
+    {
+      "id": "FIELD-127",
+      "table": "refunds",
+      "field": "anomaly_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "异常款项核实记录",
+      "constraint": "FK payment_anomalies",
+      "test": "EXCEPTION必填"
+    },
+    {
+      "id": "FIELD-128",
+      "table": "refunds",
+      "field": "kind",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "NORMAL/EXCEPTION",
+      "constraint": "CHECK",
+      "test": "库存动作必须按类型"
+    },
+    {
+      "id": "FIELD-129",
+      "table": "refunds",
+      "field": "amount_cents",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "对应收款全额",
+      "constraint": "CHECK>0",
+      "test": "等于可信收款金额且成功累计不超收款"
+    },
+    {
+      "id": "FIELD-130",
+      "table": "refunds",
+      "field": "status",
+      "type": "varchar(16)",
+      "nullDefault": "非空，READY",
+      "domain": "READY/PROCESSING/UNKNOWN/FAILED/SUCCEEDED",
+      "constraint": "CHECK",
+      "test": "失败与未知分离"
+    },
+    {
+      "id": "FIELD-131",
+      "table": "refunds",
+      "field": "current_attempt_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "当前尝试",
+      "constraint": "FK refund_attempts",
+      "test": "与状态同事务"
+    },
+    {
+      "id": "FIELD-132",
+      "table": "refunds",
+      "field": "created_by",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "审核/发起客服",
+      "constraint": "FK accounts",
+      "test": "不能买家直接生成"
+    },
+    {
+      "id": "FIELD-133",
+      "table": "refunds",
+      "field": "success_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "首次可信成功结算时间",
+      "constraint": "无",
+      "test": "成功不倒退"
+    },
+    {
+      "id": "FIELD-134",
+      "table": "refunds",
+      "field": "settled_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "本地退款/库存结算完成时间",
+      "constraint": "无",
+      "test": "和成功记账同一事务"
+    },
+    {
+      "id": "FIELD-135",
+      "table": "refunds",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "索引(status,created_at,id)",
+      "test": "可待办恢复"
+    },
+    {
+      "id": "FIELD-136",
+      "table": "refunds",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "无",
+      "test": "一致"
+    },
+    {
+      "id": "FIELD-137",
+      "table": "refund_attempts",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "尝试ID",
+      "constraint": "主键",
+      "test": "与逻辑退款分离"
+    },
+    {
+      "id": "FIELD-138",
+      "table": "refund_attempts",
+      "field": "refund_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "逻辑退款",
+      "constraint": "FK refunds",
+      "test": "存在性"
+    },
+    {
+      "id": "FIELD-139",
+      "table": "refund_attempts",
+      "field": "attempt_no",
+      "type": "integer",
+      "nullDefault": "非空",
+      "domain": "从1递增",
+      "constraint": "唯一(refund_id,attempt_no)",
+      "test": "并发重试不创建两条"
+    },
+    {
+      "id": "FIELD-140",
+      "table": "refund_attempts",
+      "field": "provider_request_id",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "渠道请求幂等键",
+      "constraint": "唯一",
+      "test": "网络重发沿用，明确失败才新尝试"
+    },
+    {
+      "id": "FIELD-141",
+      "table": "refund_attempts",
+      "field": "provider_refund_id",
+      "type": "varchar(80)",
+      "nullDefault": "可空",
+      "domain": "渠道退款号",
+      "constraint": "唯一（非空）",
+      "test": "回报精确匹配"
+    },
+    {
+      "id": "FIELD-142",
+      "table": "refund_attempts",
+      "field": "status",
+      "type": "varchar(16)",
+      "nullDefault": "非空，READY",
+      "domain": "READY/PROCESSING/UNKNOWN/FAILED/SUCCEEDED",
+      "constraint": "CHECK",
+      "test": "未知不能转READY盲重发"
+    },
+    {
+      "id": "FIELD-143",
+      "table": "refund_attempts",
+      "field": "failure_code",
+      "type": "varchar(64)",
+      "nullDefault": "可空",
+      "domain": "渠道明确失败/网络错误原因",
+      "constraint": "无",
+      "test": "HTTP超时不当FAILED"
+    },
+    {
+      "id": "FIELD-144",
+      "table": "refund_attempts",
+      "field": "proof_redacted",
+      "type": "jsonb",
+      "nullDefault": "非空，{}",
+      "domain": "可信查询/通知摘要",
+      "constraint": "无",
+      "test": "终态冲突留异常"
+    },
+    {
+      "id": "FIELD-145",
+      "table": "refund_attempts",
+      "field": "sent_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "首次发送时间",
+      "constraint": "无",
+      "test": "发送前先持久化"
+    },
+    {
+      "id": "FIELD-146",
+      "table": "refund_attempts",
+      "field": "resolved_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "可信终态时间",
+      "constraint": "无",
+      "test": "失败终态可验证"
+    },
+    {
+      "id": "FIELD-147",
+      "table": "refund_attempts",
+      "field": "last_queried_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "最后查询时间",
+      "constraint": "无",
+      "test": "未知可恢复跟进"
+    },
+    {
+      "id": "FIELD-148",
+      "table": "refund_attempts",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "索引(refund_id,created_at,id)",
+      "test": "历史不覆盖"
+    },
+    {
+      "id": "FIELD-149",
+      "table": "shipments",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "发货ID",
+      "constraint": "主键",
+      "test": "唯一"
+    },
+    {
+      "id": "FIELD-150",
+      "table": "shipments",
+      "field": "order_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "订单",
+      "constraint": "唯一FK orders",
+      "test": "最多一条"
+    },
+    {
+      "id": "FIELD-151",
+      "table": "shipments",
+      "field": "carrier",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "承运方1–80字符",
+      "constraint": "无",
+      "test": "空白拒绝"
+    },
+    {
+      "id": "FIELD-152",
+      "table": "shipments",
+      "field": "tracking_no",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "运单1–80字符，禁止控制字符",
+      "constraint": "无",
+      "test": "不全局唯一，不能误拦合法承运方单号"
+    },
+    {
+      "id": "FIELD-153",
+      "table": "shipments",
+      "field": "operator_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "仓库操作人",
+      "constraint": "FK accounts",
+      "test": "WAREHOUSE"
+    },
+    {
+      "id": "FIELD-154",
+      "table": "shipments",
+      "field": "shipped_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "登记业务时间",
+      "constraint": "无",
+      "test": "与订单同事务"
+    },
+    {
+      "id": "FIELD-155",
+      "table": "payment_anomalies",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "异常ID",
+      "constraint": "主键",
+      "test": "不删除"
+    },
+    {
+      "id": "FIELD-156",
+      "table": "payment_anomalies",
+      "field": "type",
+      "type": "varchar(32)",
+      "nullDefault": "非空",
+      "domain": "LATE_PAYMENT/INVALID_SIGNATURE/AMOUNT_MISMATCH/UNKNOWN_ORDER/TXN_CONFLICT/EXTRA_PAYMENT/REFUND_RESULT_CONFLICT/INVALID_BODY",
+      "constraint": "CHECK",
+      "test": "分类可筛选"
+    },
+    {
+      "id": "FIELD-157",
+      "table": "payment_anomalies",
+      "field": "dedupe_key",
+      "type": "varchar(160)",
+      "nullDefault": "非空",
+      "domain": "按异常类型及业务事实去重",
+      "constraint": "唯一",
+      "test": "重复通知不造多个处理退款"
+    },
+    {
+      "id": "FIELD-158",
+      "table": "payment_anomalies",
+      "field": "order_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "可核实订单",
+      "constraint": "FK orders",
+      "test": "未知可空"
+    },
+    {
+      "id": "FIELD-159",
+      "table": "payment_anomalies",
+      "field": "receipt_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "可信收款",
+      "constraint": "FK receipts",
+      "test": "未核实可空"
+    },
+    {
+      "id": "FIELD-160",
+      "table": "payment_anomalies",
+      "field": "refund_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "关联退款",
+      "constraint": "FK refunds",
+      "test": "冲突可定位"
+    },
+    {
+      "id": "FIELD-161",
+      "table": "payment_anomalies",
+      "field": "first_notification_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "首次证据",
+      "constraint": "FK channel_notifications",
+      "test": "可回查"
+    },
+    {
+      "id": "FIELD-162",
+      "table": "payment_anomalies",
+      "field": "status",
+      "type": "varchar(24)",
+      "nullDefault": "非空，OPEN",
+      "domain": "OPEN/VERIFIED/REFUNDING/RESOLVED",
+      "constraint": "CHECK",
+      "test": "只能合法动作推进"
+    },
+    {
+      "id": "FIELD-163",
+      "table": "payment_anomalies",
+      "field": "verification",
+      "type": "varchar(24)",
+      "nullDefault": "非空，UNVERIFIED",
+      "domain": "UNVERIFIED/FUNDS_CONFIRMED/NO_FUNDS/CONFLICT",
+      "constraint": "CHECK",
+      "test": "不能手填金额伪造实收"
+    },
+    {
+      "id": "FIELD-164",
+      "table": "payment_anomalies",
+      "field": "summary",
+      "type": "varchar(500)",
+      "nullDefault": "非空",
+      "domain": "安全摘要",
+      "constraint": "无",
+      "test": "敏感内容不入摘要"
+    },
+    {
+      "id": "FIELD-165",
+      "table": "payment_anomalies",
+      "field": "resolved_reason",
+      "type": "varchar(500)",
+      "nullDefault": "可空",
+      "domain": "结案原因/证据说明",
+      "constraint": "无",
+      "test": "有实际款项未退不能结案"
+    },
+    {
+      "id": "FIELD-166",
+      "table": "payment_anomalies",
+      "field": "resolved_by",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "结案客服",
+      "constraint": "FK accounts",
+      "test": "系统成功可沿用原发起人并标系统事件"
+    },
+    {
+      "id": "FIELD-167",
+      "table": "payment_anomalies",
+      "field": "resolved_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "结案业务时间",
+      "constraint": "无",
+      "test": "已处理仍可查询"
+    },
+    {
+      "id": "FIELD-168",
+      "table": "payment_anomalies",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "索引(status,type,created_at,id)",
+      "test": "活动列表"
+    },
+    {
+      "id": "FIELD-169",
+      "table": "payment_anomalies",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "无",
+      "test": "保留处理轨迹"
+    },
+    {
+      "id": "FIELD-170",
+      "table": "anomaly_actions",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "记录ID",
+      "constraint": "主键",
+      "test": "追加式"
+    },
+    {
+      "id": "FIELD-171",
+      "table": "anomaly_actions",
+      "field": "anomaly_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "异常",
+      "constraint": "FK payment_anomalies",
+      "test": "关联必须存在"
+    },
+    {
+      "id": "FIELD-172",
+      "table": "anomaly_actions",
+      "field": "actor_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "客服账号/系统",
+      "constraint": "FK accounts",
+      "test": "系统动作明确标识"
+    },
+    {
+      "id": "FIELD-173",
+      "table": "anomaly_actions",
+      "field": "action",
+      "type": "varchar(24)",
+      "nullDefault": "非空",
+      "domain": "QUERY/VERIFY/REQUEST_REFUND/RETRY/RESOLVE/CONFLICT",
+      "constraint": "CHECK",
+      "test": "禁止通用任意改状态"
+    },
+    {
+      "id": "FIELD-174",
+      "table": "anomaly_actions",
+      "field": "reason",
+      "type": "varchar(500)",
+      "nullDefault": "非空",
+      "domain": "1–500字符",
+      "constraint": "无",
+      "test": "客服动作原因必填"
+    },
+    {
+      "id": "FIELD-175",
+      "table": "anomaly_actions",
+      "field": "evidence_redacted",
+      "type": "jsonb",
+      "nullDefault": "非空，{}",
+      "domain": "核查请求/响应摘要和request_id",
+      "constraint": "无",
+      "test": "不含密钥"
+    },
+    {
+      "id": "FIELD-176",
+      "table": "anomaly_actions",
+      "field": "from_status",
+      "type": "varchar(24)",
+      "nullDefault": "非空",
+      "domain": "动作前状态",
+      "constraint": "无",
+      "test": "与事实对应"
+    },
+    {
+      "id": "FIELD-177",
+      "table": "anomaly_actions",
+      "field": "to_status",
+      "type": "varchar(24)",
+      "nullDefault": "非空",
+      "domain": "动作后状态",
+      "constraint": "无",
+      "test": "合法转换"
+    },
+    {
+      "id": "FIELD-178",
+      "table": "anomaly_actions",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "索引(anomaly_id,created_at,id)",
+      "test": "可顺序追溯"
+    },
+    {
+      "id": "FIELD-179",
+      "table": "idempotency_records",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "记录ID",
+      "constraint": "主键",
+      "test": "唯一"
+    },
+    {
+      "id": "FIELD-180",
+      "table": "idempotency_records",
+      "field": "actor_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "可信账号",
+      "constraint": "FK accounts",
+      "test": "系统/渠道不用人类请求键"
+    },
+    {
+      "id": "FIELD-181",
+      "table": "idempotency_records",
+      "field": "operation",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "HTTP method+规范化路由/对象",
+      "constraint": "唯一键组成",
+      "test": "跨接口不混用"
+    },
+    {
+      "id": "FIELD-182",
+      "table": "idempotency_records",
+      "field": "request_key",
+      "type": "varchar(64)",
+      "nullDefault": "非空",
+      "domain": "Idempotency-Key，16–64 ASCII字符",
+      "constraint": "唯一(actor_id,operation,request_key)",
+      "test": "同键换参409"
+    },
+    {
+      "id": "FIELD-183",
+      "table": "idempotency_records",
+      "field": "request_hash",
+      "type": "char(64)",
+      "nullDefault": "非空",
+      "domain": "规范化body和对象ID哈希",
+      "constraint": "无",
+      "test": "身份来自服务端"
+    },
+    {
+      "id": "FIELD-184",
+      "table": "idempotency_records",
+      "field": "resource_type",
+      "type": "varchar(32)",
+      "nullDefault": "非空",
+      "domain": "订单/退款等结果类型",
+      "constraint": "无",
+      "test": "可重读当前资源"
+    },
+    {
+      "id": "FIELD-185",
+      "table": "idempotency_records",
+      "field": "resource_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "业务资源ID",
+      "constraint": "由服务校验关联",
+      "test": "提交成功后能回读"
+    },
+    {
+      "id": "FIELD-186",
+      "table": "idempotency_records",
+      "field": "http_status",
+      "type": "smallint",
+      "nullDefault": "非空",
+      "domain": "首次成功2xx响应码",
+      "constraint": "CHECK 200..299",
+      "test": "重试返回原资源及replayed=true"
+    },
+    {
+      "id": "FIELD-187",
+      "table": "idempotency_records",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实服务端时间",
+      "constraint": "无",
+      "test": "业务生命周期内不清理"
+    },
+    {
+      "id": "FIELD-188",
+      "table": "outbox_jobs",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "任务ID",
+      "constraint": "主键",
+      "test": "唯一"
+    },
+    {
+      "id": "FIELD-189",
+      "table": "outbox_jobs",
+      "field": "job_key",
+      "type": "varchar(160)",
+      "nullDefault": "非空",
+      "domain": "稳定业务动作键",
+      "constraint": "唯一",
+      "test": "防重复任务"
+    },
+    {
+      "id": "FIELD-190",
+      "table": "outbox_jobs",
+      "field": "kind",
+      "type": "varchar(24)",
+      "nullDefault": "非空",
+      "domain": "PAYMENT_SEND/REFUND_SEND/PAYMENT_QUERY/REFUND_QUERY",
+      "constraint": "CHECK",
+      "test": "只白名单处理器"
+    },
+    {
+      "id": "FIELD-191",
+      "table": "outbox_jobs",
+      "field": "aggregate_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "意图/尝试ID",
+      "constraint": "按kind服务校验",
+      "test": "不存任意执行指令"
+    },
+    {
+      "id": "FIELD-192",
+      "table": "outbox_jobs",
+      "field": "status",
+      "type": "varchar(16)",
+      "nullDefault": "非空，READY",
+      "domain": "READY/RUNNING/DONE/RETRY",
+      "constraint": "CHECK",
+      "test": "可恢复"
+    },
+    {
+      "id": "FIELD-193",
+      "table": "outbox_jobs",
+      "field": "attempt_count",
+      "type": "integer",
+      "nullDefault": "非空，0",
+      "domain": "投递次数非负",
+      "constraint": "CHECK>=0",
+      "test": "有上限告警，不静默丢弃"
+    },
+    {
+      "id": "FIELD-194",
+      "table": "outbox_jobs",
+      "field": "next_run_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实调度时间",
+      "constraint": "索引(status,next_run_at)",
+      "test": "不受业务时钟回拨"
+    },
+    {
+      "id": "FIELD-195",
+      "table": "outbox_jobs",
+      "field": "lease_until",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "真实租约到期",
+      "constraint": "无",
+      "test": "崩溃过期可认领"
+    },
+    {
+      "id": "FIELD-196",
+      "table": "outbox_jobs",
+      "field": "last_error_code",
+      "type": "varchar(64)",
+      "nullDefault": "可空",
+      "domain": "安全失败原因",
+      "constraint": "无",
+      "test": "不含连接串"
+    },
+    {
+      "id": "FIELD-197",
+      "table": "outbox_jobs",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实时间",
+      "constraint": "无",
+      "test": "同业务事务入库"
+    },
+    {
+      "id": "FIELD-198",
+      "table": "outbox_jobs",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实时间",
+      "constraint": "无",
+      "test": "恢复可追溯"
+    },
+    {
+      "id": "FIELD-199",
+      "table": "audit_events",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "审计ID",
+      "constraint": "主键",
+      "test": "追加式"
+    },
+    {
+      "id": "FIELD-200",
+      "table": "audit_events",
+      "field": "actor_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "账号；系统/渠道可空",
+      "constraint": "FK accounts",
+      "test": "身份可信"
+    },
+    {
+      "id": "FIELD-201",
+      "table": "audit_events",
+      "field": "actor_kind",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "USER/SYSTEM/CHANNEL",
+      "constraint": "CHECK",
+      "test": "不得客户端任填"
+    },
+    {
+      "id": "FIELD-202",
+      "table": "audit_events",
+      "field": "entity_type",
+      "type": "varchar(32)",
+      "nullDefault": "非空",
+      "domain": "PRODUCT/ORDER/PAYMENT/REFUND/SHIPMENT/ANOMALY",
+      "constraint": "CHECK",
+      "test": "可联查"
+    },
+    {
+      "id": "FIELD-203",
+      "table": "audit_events",
+      "field": "entity_id",
+      "type": "uuid",
+      "nullDefault": "可空",
+      "domain": "可定位对象",
+      "constraint": "按类型服务校验",
+      "test": "未知对象可空"
+    },
+    {
+      "id": "FIELD-204",
+      "table": "audit_events",
+      "field": "action",
+      "type": "varchar(64)",
+      "nullDefault": "非空",
+      "domain": "固定业务动作码",
+      "constraint": "无",
+      "test": "不接受任意SQL或状态改写"
+    },
+    {
+      "id": "FIELD-205",
+      "table": "audit_events",
+      "field": "request_id",
+      "type": "uuid",
+      "nullDefault": "非空",
+      "domain": "服务端关联ID",
+      "constraint": "索引",
+      "test": "与HTTP响应关联"
+    },
+    {
+      "id": "FIELD-206",
+      "table": "audit_events",
+      "field": "before_redacted",
+      "type": "jsonb",
+      "nullDefault": "非空，{}",
+      "domain": "变更前关键值",
+      "constraint": "无",
+      "test": "脱敏"
+    },
+    {
+      "id": "FIELD-207",
+      "table": "audit_events",
+      "field": "after_redacted",
+      "type": "jsonb",
+      "nullDefault": "非空，{}",
+      "domain": "变更后关键值",
+      "constraint": "无",
+      "test": "可解释状态/金额/库存"
+    },
+    {
+      "id": "FIELD-208",
+      "table": "audit_events",
+      "field": "reason",
+      "type": "varchar(500)",
+      "nullDefault": "非空",
+      "domain": "操作理由或系统原因",
+      "constraint": "无",
+      "test": "商品维护、审核、异常需原因"
+    },
+    {
+      "id": "FIELD-209",
+      "table": "audit_events",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "索引(entity_type,entity_id,created_at,id)",
+      "test": "留历史"
+    },
+    {
+      "id": "FIELD-210",
+      "table": "demo_clock",
+      "field": "id",
+      "type": "smallint",
+      "nullDefault": "非空，1",
+      "domain": "唯一单行，固定1",
+      "constraint": "主键及CHECK=1",
+      "test": "禁止插第二行/删除后默默归零"
+    },
+    {
+      "id": "FIELD-211",
+      "table": "demo_clock",
+      "field": "offset_seconds",
+      "type": "bigint",
+      "nullDefault": "非空，0",
+      "domain": "相对真实UTC的非负偏移",
+      "constraint": "CHECK>=0",
+      "test": "只前进，重启不归零"
+    },
+    {
+      "id": "FIELD-212",
+      "table": "demo_clock",
+      "field": "version",
+      "type": "bigint",
+      "nullDefault": "非空，0",
+      "domain": "每次推进递增",
+      "constraint": "并发条件更新",
+      "test": "并发推进不丢更新"
+    },
+    {
+      "id": "FIELD-213",
+      "table": "demo_clock",
+      "field": "updated_by",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "独立admin凭证的安全标识，非令牌值",
+      "constraint": "无",
+      "test": "不可由body伪造"
+    },
+    {
+      "id": "FIELD-214",
+      "table": "demo_clock",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实UTC",
+      "constraint": "无",
+      "test": "不使用已偏移业务时间"
+    },
+    {
+      "id": "FIELD-215",
+      "table": "mock.channel_payments",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "渠道内部ID",
+      "constraint": "主键",
+      "test": "独立数据库/独立schema账户"
+    },
+    {
+      "id": "FIELD-216",
+      "table": "mock.channel_payments",
+      "field": "merchant_ref",
+      "type": "varchar(40)",
+      "nullDefault": "非空",
+      "domain": "配置的教学商城标识",
+      "constraint": "唯一键组成",
+      "test": "跨商户请求拒绝"
+    },
+    {
+      "id": "FIELD-217",
+      "table": "mock.channel_payments",
+      "field": "request_id",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "商城支付幂等键",
+      "constraint": "唯一(merchant_ref,request_id)",
+      "test": "同键换参409"
+    },
+    {
+      "id": "FIELD-218",
+      "table": "mock.channel_payments",
+      "field": "order_ref",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "商城订单引用",
+      "constraint": "不可变",
+      "test": "查询返回原值"
+    },
+    {
+      "id": "FIELD-219",
+      "table": "mock.channel_payments",
+      "field": "txn_id",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "渠道交易号",
+      "constraint": "唯一",
+      "test": "不同请求也不重复"
+    },
+    {
+      "id": "FIELD-220",
+      "table": "mock.channel_payments",
+      "field": "amount_cents",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "正整数人民币分",
+      "constraint": "CHECK>0",
+      "test": "超范围拒绝"
+    },
+    {
+      "id": "FIELD-221",
+      "table": "mock.channel_payments",
+      "field": "currency",
+      "type": "char(3)",
+      "nullDefault": "非空，CNY",
+      "domain": "币种",
+      "constraint": "CHECK=CNY",
+      "test": "不支持币种拒绝"
+    },
+    {
+      "id": "FIELD-222",
+      "table": "mock.channel_payments",
+      "field": "status",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "PENDING/SUCCEEDED/FAILED",
+      "constraint": "CHECK",
+      "test": "终态不可反转"
+    },
+    {
+      "id": "FIELD-223",
+      "table": "mock.channel_payments",
+      "field": "paid_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "成功业务时间",
+      "constraint": "无",
+      "test": "成功必填"
+    },
+    {
+      "id": "FIELD-224",
+      "table": "mock.channel_payments",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "无",
+      "test": "持久化"
+    },
+    {
+      "id": "FIELD-225",
+      "table": "mock.channel_payments",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "无",
+      "test": "重启可查"
+    },
+    {
+      "id": "FIELD-226",
+      "table": "mock.channel_refunds",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "内部ID",
+      "constraint": "主键",
+      "test": "稳定"
+    },
+    {
+      "id": "FIELD-227",
+      "table": "mock.channel_refunds",
+      "field": "merchant_ref",
+      "type": "varchar(40)",
+      "nullDefault": "非空",
+      "domain": "商城标识",
+      "constraint": "联合唯一组成",
+      "test": "身份绑定"
+    },
+    {
+      "id": "FIELD-228",
+      "table": "mock.channel_refunds",
+      "field": "request_id",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "商城退款尝试幂等键",
+      "constraint": "唯一(merchant_ref,request_id)",
+      "test": "重发不重复实退"
+    },
+    {
+      "id": "FIELD-229",
+      "table": "mock.channel_refunds",
+      "field": "txn_id",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "原成功交易",
+      "constraint": "FK channel_payments.txn_id",
+      "test": "只退本商户收款"
+    },
+    {
+      "id": "FIELD-230",
+      "table": "mock.channel_refunds",
+      "field": "refund_id",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "渠道退款号",
+      "constraint": "唯一",
+      "test": "通知与查询同号"
+    },
+    {
+      "id": "FIELD-231",
+      "table": "mock.channel_refunds",
+      "field": "amount_cents",
+      "type": "bigint",
+      "nullDefault": "非空",
+      "domain": "整笔真实金额",
+      "constraint": "CHECK>0",
+      "test": "成功实退累计不得超过原收款"
+    },
+    {
+      "id": "FIELD-232",
+      "table": "mock.channel_refunds",
+      "field": "status",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "PENDING/SUCCEEDED/FAILED",
+      "constraint": "CHECK",
+      "test": "明确失败不能事后变成功"
+    },
+    {
+      "id": "FIELD-233",
+      "table": "mock.channel_refunds",
+      "field": "failure_code",
+      "type": "varchar(64)",
+      "nullDefault": "可空",
+      "domain": "明确失败码",
+      "constraint": "无",
+      "test": "可触发首败再成功"
+    },
+    {
+      "id": "FIELD-234",
+      "table": "mock.channel_refunds",
+      "field": "refunded_at",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "成功业务时间",
+      "constraint": "无",
+      "test": "成功必填"
+    },
+    {
+      "id": "FIELD-235",
+      "table": "mock.channel_refunds",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "无",
+      "test": "重启可查"
+    },
+    {
+      "id": "FIELD-236",
+      "table": "mock.channel_refunds",
+      "field": "updated_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "业务时间",
+      "constraint": "无",
+      "test": "同键结果稳定"
+    },
+    {
+      "id": "FIELD-237",
+      "table": "mock.notification_jobs",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "任务ID",
+      "constraint": "主键",
+      "test": "稳定"
+    },
+    {
+      "id": "FIELD-238",
+      "table": "mock.notification_jobs",
+      "field": "kind",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "PAYMENT/REFUND",
+      "constraint": "CHECK",
+      "test": "签名协议一致"
+    },
+    {
+      "id": "FIELD-239",
+      "table": "mock.notification_jobs",
+      "field": "resource_ref",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "txn_id或refund_id",
+      "constraint": "服务校验",
+      "test": "查询得到原事实"
+    },
+    {
+      "id": "FIELD-240",
+      "table": "mock.notification_jobs",
+      "field": "event_id",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "稳定事件号",
+      "constraint": "唯一",
+      "test": "重复投递用同event_id"
+    },
+    {
+      "id": "FIELD-241",
+      "table": "mock.notification_jobs",
+      "field": "deliver_after",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实调度时间",
+      "constraint": "索引",
+      "test": "显式教学延迟"
+    },
+    {
+      "id": "FIELD-242",
+      "table": "mock.notification_jobs",
+      "field": "remaining_deliveries",
+      "type": "integer",
+      "nullDefault": "非空",
+      "domain": "0..20",
+      "constraint": "CHECK",
+      "test": "支持重复次数，上限防误发洪泛"
+    },
+    {
+      "id": "FIELD-243",
+      "table": "mock.notification_jobs",
+      "field": "status",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "READY/RUNNING/DONE/RETRY",
+      "constraint": "CHECK",
+      "test": "可恢复"
+    },
+    {
+      "id": "FIELD-244",
+      "table": "mock.notification_jobs",
+      "field": "lease_until",
+      "type": "timestamptz",
+      "nullDefault": "可空",
+      "domain": "真实租约",
+      "constraint": "无",
+      "test": "重启恢复"
+    },
+    {
+      "id": "FIELD-245",
+      "table": "mock.notification_jobs",
+      "field": "last_http_status",
+      "type": "smallint",
+      "nullDefault": "可空",
+      "domain": "最近商城响应",
+      "constraint": "无",
+      "test": "5xx可重试"
+    },
+    {
+      "id": "FIELD-246",
+      "table": "mock.notification_jobs",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实时间",
+      "constraint": "无",
+      "test": "投递轨迹"
+    },
+    {
+      "id": "FIELD-247",
+      "table": "mock.simulation_rules",
+      "field": "id",
+      "type": "uuid",
+      "nullDefault": "非空，生成",
+      "domain": "规则ID",
+      "constraint": "主键",
+      "test": "稳定"
+    },
+    {
+      "id": "FIELD-248",
+      "table": "mock.simulation_rules",
+      "field": "target_order_ref",
+      "type": "varchar(80)",
+      "nullDefault": "非空",
+      "domain": "已知商城订单引用，发送前可配置",
+      "constraint": "索引",
+      "test": "只匹配明确订单，不全局污染并发"
+    },
+    {
+      "id": "FIELD-249",
+      "table": "mock.simulation_rules",
+      "field": "target_request_id",
+      "type": "varchar(80)",
+      "nullDefault": "可空",
+      "domain": "进一步限定已知意图/尝试请求键",
+      "constraint": "索引",
+      "test": "非空时必须同时匹配"
+    },
+    {
+      "id": "FIELD-250",
+      "table": "mock.simulation_rules",
+      "field": "attempt_no",
+      "type": "integer",
+      "nullDefault": "可空",
+      "domain": "进一步限定退款第几次尝试，>=1",
+      "constraint": "CHECK",
+      "test": "可预设首次失败第二次成功"
+    },
+    {
+      "id": "FIELD-251",
+      "table": "mock.simulation_rules",
+      "field": "operation",
+      "type": "varchar(16)",
+      "nullDefault": "非空",
+      "domain": "PAYMENT/REFUND/NOTIFY",
+      "constraint": "CHECK",
+      "test": "白名单"
+    },
+    {
+      "id": "FIELD-252",
+      "table": "mock.simulation_rules",
+      "field": "mode",
+      "type": "varchar(32)",
+      "nullDefault": "非空",
+      "domain": "SUCCESS/EXPLICIT_FAIL/TIMEOUT_AFTER_SUCCESS/PENDING/DELAY_NOTIFY/DUPLICATE_NOTIFY",
+      "constraint": "CHECK",
+      "test": "拒绝任意程序/URL"
+    },
+    {
+      "id": "FIELD-253",
+      "table": "mock.simulation_rules",
+      "field": "delay_ms",
+      "type": "integer",
+      "nullDefault": "非空，0",
+      "domain": "0..600000",
+      "constraint": "CHECK",
+      "test": "教学可控上限"
+    },
+    {
+      "id": "FIELD-254",
+      "table": "mock.simulation_rules",
+      "field": "repeat_count",
+      "type": "integer",
+      "nullDefault": "非空，1",
+      "domain": "1..20",
+      "constraint": "CHECK",
+      "test": "不影响真实业务幂等"
+    },
+    {
+      "id": "FIELD-255",
+      "table": "mock.simulation_rules",
+      "field": "remaining_uses",
+      "type": "integer",
+      "nullDefault": "非空，1",
+      "domain": "1..20",
+      "constraint": "CHECK",
+      "test": "原子消费"
+    },
+    {
+      "id": "FIELD-256",
+      "table": "mock.simulation_rules",
+      "field": "created_at",
+      "type": "timestamptz",
+      "nullDefault": "非空",
+      "domain": "真实时间",
+      "constraint": "无",
+      "test": "保留配置证据"
+    }
+  ],
+  "apis": [
+    {
+      "id": "API01",
+      "method": "POST",
+      "url": "/api/v1/auth/login",
+      "role": "匿名",
+      "input": "body: login_name:string(3..64)，password:string(教学Demo模式6..128，非Demo模式8..128)，均必填",
+      "output": "200: token:string，expires_at:UTC，account:Account",
+      "rules": "比对哈希、账号启用；失败统一INVALID_CREDENTIALS，不泄露账号是否存在；限流；密码/token不入日志",
+      "tests": "正确/错误/停用/超长/重复登录；只返回安全Account"
+    },
+    {
+      "id": "API02",
+      "method": "GET",
+      "url": "/api/v1/auth/me",
+      "role": "所有已登录角色",
+      "input": "无body",
+      "output": "200: Account",
+      "rules": "从会话取身份与最新enabled/role，不信任query/user_id",
+      "tests": "缺token、过期、撤销、伪造、改角色/用户ID"
+    },
+    {
+      "id": "API03",
+      "method": "POST",
+      "url": "/api/v1/auth/logout",
+      "role": "所有已登录角色",
+      "input": "无body",
+      "output": "200: {revoked:true}",
+      "rules": "撤销当前会话，已撤销token再次请求401；不影响其他会话",
+      "tests": "撤销即时生效；不把密码/token回显"
+    },
+    {
+      "id": "API04",
+      "method": "GET",
+      "url": "/api/v1/products",
+      "role": "BUYER",
+      "input": "query: cursor?,limit?",
+      "output": "200: Page<Product>",
+      "rules": "只返回在售；可售0仍可显示售罄；不要求加购物车",
+      "tests": "下架隐藏、售罄可见、稳定分页、非买家403"
+    },
+    {
+      "id": "API05",
+      "method": "GET",
+      "url": "/api/v1/buyer/orders",
+      "role": "BUYER",
+      "input": "query: status?（七主状态），cursor?,limit?",
+      "output": "200: Page<OrderSummary>",
+      "rules": "服务端强制buyer_id当前用户；禁止query任意buyer_id",
+      "tests": "本人/他人隔离、非法status/分页、到期状态说明"
+    },
+    {
+      "id": "API06",
+      "method": "POST",
+      "url": "/api/v1/buyer/orders",
+      "role": "BUYER",
+      "input": "body: product_id:UUID，quantity:number(整数1或2)，均必填；Idempotency-Key必填",
+      "output": "201: OrderDetail；同键成功重放原http状态并meta.replayed=true",
+      "rules": "锁商品合法快照；本事务订单+占用+流水+幂等；客户端金额/状态/买家ID未知字段400",
+      "tests": "缺货/下架/所有非法quantity；20并发；同键并发/换参；落库失败回滚"
+    },
+    {
+      "id": "API07",
+      "method": "GET",
+      "url": "/api/v1/buyer/orders/{order_id}",
+      "role": "BUYER本人",
+      "input": "path UUID",
+      "output": "200: OrderDetail",
+      "rules": "他人订单与不存在统一404；过期未扫时executable_actions不放付款，显示期限已到，worker负责关闭；只读GET不修改状态",
+      "tests": "越权详情/运单/收退款隔离；重启回读；过期旧状态不可付"
+    },
+    {
+      "id": "API08",
+      "method": "POST",
+      "url": "/api/v1/buyer/orders/{order_id}/cancel",
+      "role": "BUYER本人",
+      "input": "body: reason:string(1..500)；Idempotency-Key",
+      "output": "200: OrderDetail",
+      "rules": "仅待付款关闭；同一关闭重复回当前事实、不多释放；已付款409；已超时保持TIMEOUT原因",
+      "tests": "重复关闭、跨人、付款竞争、超时竞争；库存一次"
+    },
+    {
+      "id": "API09",
+      "method": "POST",
+      "url": "/api/v1/buyer/orders/{order_id}/payments",
+      "role": "BUYER本人",
+      "input": "空JSON {}；Idempotency-Key",
+      "output": "202: PaymentIntent",
+      "rules": "创建或复用非失败意图+outbox，金额由快照；过期先在锁内关闭后持久化拒绝事实；明确失败后可新意图，UNKNOWN先查原意图",
+      "tests": "过期/关闭/已付拒绝；同键/不同键并发不重复扣款；响应丢失恢复"
+    },
+    {
+      "id": "API10",
+      "method": "POST",
+      "url": "/api/v1/buyer/payments/{payment_id}/query",
+      "role": "BUYER本人",
+      "input": "空JSON {}；Idempotency-Key",
+      "output": "202: PaymentIntent（查询任务已排队）",
+      "rules": "仅查询该意图原渠道请求；可信结果走共享结算入口；非本人404",
+      "tests": "未知仍未知/成功/明确失败；不会延长到期或新扣款"
+    },
+    {
+      "id": "API11",
+      "method": "POST",
+      "url": "/api/v1/buyer/orders/{order_id}/refund-applications",
+      "role": "BUYER本人",
+      "input": "body: reason:string(1..500)；Idempotency-Key",
+      "output": "201: RefundApplication",
+      "rules": "仅PENDING_SHIPMENT；锁内申请+冻结；活动申请同键重放原资源，新键返回409 ACTIVE_REFUND；已驳回可新申请",
+      "tests": "重复、重提、已发货/待付款拒绝；申请与发货并发唯一结果"
+    },
+    {
+      "id": "API12",
+      "method": "GET",
+      "url": "/api/v1/warehouse/orders",
+      "role": "WAREHOUSE",
+      "input": "query: cursor?,limit?",
+      "output": "200: Page<WarehouseOrder>",
+      "rules": "仅PENDING_SHIPMENT且无活动退款；必要单据/商品/数量，不暴露会话或渠道敏感字段",
+      "tests": "被冻结/已发货不列；跨角色403；旧页面操作仍重查"
+    },
+    {
+      "id": "API13",
+      "method": "POST",
+      "url": "/api/v1/warehouse/orders/{order_id}/shipment",
+      "role": "WAREHOUSE",
+      "input": "body: carrier:string(1..80)，tracking_no:string(1..80)；Idempotency-Key",
+      "output": "201: Shipment",
+      "rules": "锁内待发货且无活动退款；登记一次+SHIP；同键同参重放；新键重复409 SHIPMENT_EXISTS，运单不覆盖",
+      "tests": "必填/控制字符/超长、重复、新参数覆盖拒绝、申请竞争"
+    },
+    {
+      "id": "API14",
+      "method": "GET",
+      "url": "/api/v1/support/refund-applications",
+      "role": "SUPPORT",
+      "input": "query: status?（申请枚举），cursor?,limit?",
+      "output": "200: Page<RefundApplication>",
+      "rules": "默认PENDING；可查历次审核，拒绝不删",
+      "tests": "筛选历史、分页、越权、用户自报role无效"
+    },
+    {
+      "id": "API15",
+      "method": "POST",
+      "url": "/api/v1/support/refund-applications/{application_id}/review",
+      "role": "SUPPORT",
+      "input": "body: decision:APPROVE或REJECT，reason:string(1..500)；Idempotency-Key",
+      "output": "200: {application:RefundApplication,refund:Refund|null}",
+      "rules": "一次结论；同键同参回原；已审核同结论新键回原事实且不覆盖原因，冲突结论409；批准创建唯一退款/首尝试/outbox，拒绝解除冻结",
+      "tests": "双客服/同意拒绝竞争；原因空/非法decision；旧申请不能影响新申请"
+    },
+    {
+      "id": "API16",
+      "method": "GET",
+      "url": "/api/v1/support/refunds",
+      "role": "SUPPORT",
+      "input": "query: status?（退款枚举），kind?:NORMAL或EXCEPTION，cursor?,limit?",
+      "output": "200: Page<Refund>",
+      "rules": "展示FAILED/UNKNOWN/READY及原收款和尝试；默认未SUCCEEDED",
+      "tests": "失败与未知区分；整笔计数不按attempt累加"
+    },
+    {
+      "id": "API17",
+      "method": "POST",
+      "url": "/api/v1/support/refunds/{refund_id}/retry",
+      "role": "SUPPORT",
+      "input": "body: reason:string(1..500)；Idempotency-Key",
+      "output": "202: Refund",
+      "rules": "仅可信FAILED可新尝试，UNKNOWN/PROCESSING拒绝RESULT_UNKNOWN或STATE_CONFLICT；唯一活动尝试；同键返回原尝试",
+      "tests": "失败重试成功、未知拒绝、重复重试、旧回报竞争不多退"
+    },
+    {
+      "id": "API18",
+      "method": "POST",
+      "url": "/api/v1/support/refunds/{refund_id}/query",
+      "role": "SUPPORT",
+      "input": "body: reason:string(1..500)；Idempotency-Key",
+      "output": "202: Refund",
+      "rules": "排队查询原尝试；不新建资金请求；可信成功/失败驱动同一结算入口",
+      "tests": "未知维持冻结；确认成功只结算一次；确认失败才允许retry"
+    },
+    {
+      "id": "API19",
+      "method": "GET",
+      "url": "/api/v1/support/payment-anomalies",
+      "role": "SUPPORT",
+      "input": "query: status?（异常枚举），type?（异常类型），cursor?,limit?",
+      "output": "200: Page<Anomaly>",
+      "rules": "已解决可按筛选查询，默认未RESOLVED；保留无效通知处理结论",
+      "tests": "迟到/验签失败/金额不符/未知/冲突均可查；不直接改状态消失"
+    },
+    {
+      "id": "API20",
+      "method": "GET",
+      "url": "/api/v1/support/payment-anomalies/{anomaly_id}",
+      "role": "SUPPORT",
+      "input": "path UUID",
+      "output": "200: AnomalyDetail",
+      "rules": "含脱敏通知和核查、退款历史；无任意改状态按钮",
+      "tests": "原始关键标识可查但无密钥、token和未脱敏body"
+    },
+    {
+      "id": "API21",
+      "method": "POST",
+      "url": "/api/v1/support/payment-anomalies/{anomaly_id}/verify",
+      "role": "SUPPORT",
+      "input": "body: reason:string(1..500)；Idempotency-Key",
+      "output": "200: AnomalyDetail；外部未确认可202同DTO",
+      "rules": "固定渠道可信查询；商户/交易/金额归属全校验；body不允许直接写verified=true/金额。查询失败保持待核实，记录动作",
+      "tests": "恶意未签通知不能任填退款；正常迟到可信核实；查询未知/错商户"
+    },
+    {
+      "id": "API22",
+      "method": "POST",
+      "url": "/api/v1/support/payment-anomalies/{anomaly_id}/refund",
+      "role": "SUPPORT",
+      "input": "body: reason:string(1..500)；Idempotency-Key",
+      "output": "202: Refund",
+      "rules": "仅FUNDS_CONFIRMED且receipt存在、未成功退款；按实际全额EXCEPTION；创建一次逻辑退款/尝试/outbox；无库存动作",
+      "tests": "未核实拒绝；重复返回同退款；迟到/未知订单可信资金处理；库存不再释放"
+    },
+    {
+      "id": "API23",
+      "method": "POST",
+      "url": "/api/v1/support/payment-anomalies/{anomaly_id}/resolve",
+      "role": "SUPPORT",
+      "input": "body: reason:string(1..500)；Idempotency-Key",
+      "output": "200: AnomalyDetail",
+      "rules": "仅可信NO_FUNDS等无需资金动作可人工结案；有资金必须SUCCEEDED实退才系统收尾，CONFLICT/UNKNOWN不得结案",
+      "tests": "写忽略不能抹异常；资金未退拒绝；历史保留"
+    },
+    {
+      "id": "API24",
+      "method": "GET",
+      "url": "/api/v1/support/notifications",
+      "role": "SUPPORT",
+      "input": "query: kind?,process_result?,cursor?,limit?",
+      "output": "200: Page<Notification>",
+      "rules": "可查询鉴权失败、重复、金额不符、未知订单及处理结论；字段脱敏",
+      "tests": "重放有接收轨迹，无资金重复；无效body记录；分页及权限"
+    },
+    {
+      "id": "API25",
+      "method": "GET",
+      "url": "/api/v1/operator/products",
+      "role": "OPERATOR",
+      "input": "query: cursor?,limit?",
+      "output": "200: Page<Product>",
+      "rules": "含上下架两类、库存四分量及版本；只读",
+      "tests": "与流水、订单占用一致；其他角色403"
+    },
+    {
+      "id": "API26",
+      "method": "PATCH",
+      "url": "/api/v1/operator/products/{product_id}",
+      "role": "OPERATOR",
+      "input": "body: version:integer>=0，reason:string(1..500)，name?:string(1..120)，unit_price_cents?:Money，sale_status?:枚举；至少一项变更；Idempotency-Key",
+      "output": "200: Product",
+      "rules": "不允许body直接改库存/旧单；锁内比version，保留审计变更前后",
+      "tests": "缺字段/非法价格/旧version/调价下架与下单竞争；快照不变"
+    },
+    {
+      "id": "API27",
+      "method": "POST",
+      "url": "/api/v1/operator/products/{product_id}/inventory-adjustments",
+      "role": "OPERATOR",
+      "input": "body: delta:integer(-1000000..1000000且非0)，reason:string(1..500)，version:integer>=0；Idempotency-Key",
+      "output": "201: InventoryEntry",
+      "rules": "只调available及adjustment_net，不改reserved；available+delta范围合法，保存前后值和人",
+      "tests": "负库存拒绝、同键重复、原因空、与下单并发守恒"
+    },
+    {
+      "id": "API28",
+      "method": "GET",
+      "url": "/api/v1/operator/orders",
+      "role": "OPERATOR",
+      "input": "query: order_no?,buyer_id?:UUID,status?,cursor?,limit?",
+      "output": "200: Page<OrderSummary>",
+      "rules": "运营可跨订单核对，仅只读；不提供修改订单状态接口",
+      "tests": "联查筛选、无敏感数据、分页"
+    },
+    {
+      "id": "API29",
+      "method": "GET",
+      "url": "/api/v1/operator/orders/{order_id}/reconciliation",
+      "role": "OPERATOR",
+      "input": "path UUID",
+      "output": "200: Reconciliation",
+      "rules": "同一一致快照关联订单、库存流水、收款、退款、发货、异常/审核历史及差异；未知状态不能标全部结清",
+      "tests": "正常、退款、迟到、重复、未知、失败明细汇总一致"
+    },
+    {
+      "id": "API30",
+      "method": "GET",
+      "url": "/api/v1/operator/summary",
+      "role": "OPERATOR",
+      "input": "query: product_id?:UUID；无额外日期过滤本题保持全活动累计",
+      "output": "200: Summary",
+      "rules": "可信正常/异常实收、成功实退/净留存、未核实/未知/失败/待办数量单列，库存守恒",
+      "tests": "不按通知条数累加；未知不当已退；下钻金额一致"
+    },
+    {
+      "id": "API31",
+      "method": "POST",
+      "url": "/api/v1/channel/payment-notifications",
+      "role": "模拟渠道HMAC",
+      "input": "body: event_id,merchant_ref,order_ref,request_id,txn_id,amount_cents:Money,currency:CNY,status:SUCCEEDED或FAILED,occurred_at:UTC；全部必填",
+      "output": "200: {notification_id:UUID,result:处理枚举}；无效鉴权401",
+      "rules": "先限body/解析安全摘要，再鉴权、匹配、唯一归属、时限；有效失败只更新意图不记实收；业务异常持久化后200 ACK，基础设施失败503，签名错401仍留记录",
+      "tests": "重复、错签/重放时间、错金额、未知订单、交易跨单、不同交易同单、迟到、取消竞争"
+    },
+    {
+      "id": "API32",
+      "method": "POST",
+      "url": "/api/v1/channel/refund-notifications",
+      "role": "模拟渠道HMAC",
+      "input": "body: event_id,merchant_ref,txn_id,request_id,refund_id,amount_cents:Money,currency:CNY,status:SUCCEEDED或FAILED,occurred_at:UTC，failure_code?:string；全部必填项按上文",
+      "output": "200: {notification_id:UUID,result:处理枚举}；签名错401",
+      "rules": "精确匹配尝试/收款/金额；成功仅首次结算；旧/矛盾回报留冲突，不能倒退/多退；失败须来自渠道明确终态",
+      "tests": "重复成功/失败、旧尝试、错金额/身份/收款、回报与query并发"
+    },
+    {
+      "id": "API33",
+      "method": "GET",
+      "url": "/health/live",
+      "role": "无认证（仅必要信息）",
+      "input": "无",
+      "output": "200: {status:UP}",
+      "rules": "只证明进程存活，无DB/密钥/业务细节",
+      "tests": "响应快且不泄露配置"
+    },
+    {
+      "id": "API34",
+      "method": "GET",
+      "url": "/health/ready",
+      "role": "部署健康探测",
+      "input": "无",
+      "output": "200或503: {status:UP或DOWN,version:string}",
+      "rules": "检查DB/迁移就绪，外部依赖故障有明确ready策略；版本为构建注入SHA",
+      "tests": "DB断开503、版本标识、不能代替业务冒烟"
+    },
+    {
+      "id": "API35",
+      "method": "GET",
+      "url": "/api/v1/support/orders/{order_id}",
+      "role": "SUPPORT",
+      "input": "path UUID",
+      "output": "200: OrderDetail",
+      "rules": "用于审核时查看订单快照、支付/退款与发货事实；仅安全字段，不允许借此改订单；买家仍只本人",
+      "tests": "客服能核实金额/状态；买家调用员工路由403；无敏感凭证"
+    },
+    {
+      "id": "API36",
+      "method": "GET",
+      "url": "/api/v1/operator/receipts",
+      "role": "OPERATOR",
+      "input": "query: classification?,order_id?:UUID,cursor?,limit?",
+      "output": "200: Page<Receipt>",
+      "rules": "汇总实收下钻，含可信未知订单收款，未核实通知不混入实收",
+      "tests": "总额与分页明细一致，异常和正常分类，未知订单也不丢记录"
+    },
+    {
+      "id": "API37",
+      "method": "GET",
+      "url": "/api/v1/operator/refunds",
+      "role": "OPERATOR",
+      "input": "query: status?,kind?,order_id?:UUID,cursor?,limit?",
+      "output": "200: Page<Refund>",
+      "rules": "汇总实退/失败/未知下钻，按逻辑退款计额不按attempt计额",
+      "tests": "成功金额一致，失败未知不能算实退，角色只读"
+    },
+    {
+      "id": "API38",
+      "method": "GET",
+      "url": "/api/v1/operator/payment-anomalies",
+      "role": "OPERATOR",
+      "input": "query: status?,type?,cursor?,limit?",
+      "output": "200: Page<Anomaly>",
+      "rules": "运营可只读核查包括未知订单的全部活动/历史异常，不限有订单才可查",
+      "tests": "异常汇总数量与列表一致，不修改状态、不泄密"
+    },
+    {
+      "id": "API39",
+      "method": "GET",
+      "url": "/api/v1/operator/payment-anomalies/{anomaly_id}",
+      "role": "OPERATOR",
+      "input": "path UUID",
+      "output": "200: AnomalyDetail",
+      "rules": "只读核查通知处理结论、客服核实与退款记录；客服操作仍仅SUPPORT可用",
+      "tests": "明细/汇总可追溯；运营不能借查询权限审核/退款/结案"
+    },
+    {
+      "id": "MOCK01",
+      "method": "POST",
+      "url": "/mock/v1/payments",
+      "role": "商城服务HMAC",
+      "input": "body: merchant_ref,request_id,order_ref,amount_cents:Money,currency:CNY",
+      "output": "200: ChannelPayment；受控超时可无响应",
+      "rules": "幂等键固定、相同参数回原交易，换参409；模拟成功/失败/未知/响应丢失",
+      "tests": "渠道实际扣一次、重启可查、商城不能直接写渠道DB"
+    },
+    {
+      "id": "MOCK02",
+      "method": "GET",
+      "url": "/mock/v1/payments/by-request/{request_id}",
+      "role": "商城服务HMAC",
+      "input": "path ASCII16..80，query: merchant_ref必填",
+      "output": "200: ChannelPayment；不存在404（仅表示尚无记录，商城先保持待确认）",
+      "rules": "同商户可查，不以未找到直接允许另建交易",
+      "tests": "未知/成功/失败/错商户/查询超时"
+    },
+    {
+      "id": "MOCK03",
+      "method": "GET",
+      "url": "/mock/v1/transactions/{txn_id}",
+      "role": "商城服务HMAC",
+      "input": "path ASCII1..80，query: merchant_ref必填",
+      "output": "200: ChannelPayment；不存在404",
+      "rules": "用于异常款项独立核实，固定渠道URL及商户身份",
+      "tests": "伪造通知/不存在/错商户不变实收"
+    },
+    {
+      "id": "MOCK04",
+      "method": "POST",
+      "url": "/mock/v1/refunds",
+      "role": "商城服务HMAC",
+      "input": "body: merchant_ref,request_id,txn_id,amount_cents:Money,currency:CNY",
+      "output": "200: ChannelRefund；受控超时可无响应",
+      "rules": "锁原渠道收款，校验商户及全额累计；同键返回同退款，明确失败才能新键",
+      "tests": "首次失败后成功、超时但实退成功、重发不多退/超原额拒绝"
+    },
+    {
+      "id": "MOCK05",
+      "method": "GET",
+      "url": "/mock/v1/refunds/by-request/{request_id}",
+      "role": "商城服务HMAC",
+      "input": "path ASCII16..80，query: merchant_ref必填",
+      "output": "200: ChannelRefund；不存在404（未确认，不当明确失败）",
+      "rules": "可信终态稳定，未知不新退款",
+      "tests": "成功/失败/PENDING/未找到/网络超时"
+    },
+    {
+      "id": "MOCK06",
+      "method": "POST",
+      "url": "/mock/admin/rules",
+      "role": "教学开关+独立admin令牌",
+      "input": "body: target_order_ref:string(1..80)，operation,mode（规则表枚举），target_request_id?:string(16..80)，attempt_no?:integer>=1，delay_ms?:0..600000，repeat_count?:1..20，remaining_uses?:1..20",
+      "output": "201: SimulationRule",
+      "rules": "只控制指定订单及尝试；预先为已有订单设置首败/二次成功或延迟；业务角色无权",
+      "tests": "开关关闭404、普通token403、非法模式/值拒绝，不暴露签名密钥"
+    },
+    {
+      "id": "MOCK07",
+      "method": "POST",
+      "url": "/mock/admin/notifications/{event_id}/replay",
+      "role": "教学开关+独立admin令牌",
+      "input": "path event_id，body: repeat_count:1..20，delay_ms:0..600000",
+      "output": "202: {event_id:string,queued:number}",
+      "rules": "只重发已有真实事件，目标回调固定白名单；重复event使用新签名nonce但同业务ID",
+      "tests": "重复/迟到可演示；任意callback_url拒绝、超范围拒绝"
+    },
+    {
+      "id": "DEMO01",
+      "method": "POST",
+      "url": "/internal/demo/clock/advance",
+      "role": "仅教学开关+独立admin令牌",
+      "input": "body: seconds:integer(1..3600)",
+      "output": "200: {business_now:UTC,advanced_seconds:number,offset_seconds:number,version:number}",
+      "rules": "数据库原子推进demo_clock，记录安全管理标识；只前进，商城/模拟渠道同源；不改认证/HMAC/租约；不允许公网无鉴权",
+      "tests": "10分钟前/正好/后边界，重启/多实例统一，并发推进不丢更新；默认真实10分钟"
+    },
+    {
+      "id": "DEMO02",
+      "method": "GET",
+      "url": "/internal/demo/clock",
+      "role": "仅教学开关+模拟渠道服务HMAC或独立admin令牌",
+      "input": "无body",
+      "output": "200: {business_now:UTC,offset_seconds:number,version:number}",
+      "rules": "统一读取持久偏移供mock ClockProvider使用，真实模式教学端点404；不泄露DB配置/签名密钥；普通业务身份禁止",
+      "tests": "多进程偏移一致，重启保留，鉴权/教学开关；时钟不可由客户端回拨"
+    }
+  ],
+  "apiTests": [
+    {
+      "id": "HTTP-API01",
+      "api": "API01",
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "role": "匿名",
+      "test": "正确/错误/停用/超长/重复登录；只返回安全Account",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API02",
+      "api": "API02",
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "role": "所有已登录角色",
+      "test": "缺token、过期、撤销、伪造、改角色/用户ID",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API03",
+      "api": "API03",
+      "method": "POST",
+      "path": "/api/v1/auth/logout",
+      "role": "所有已登录角色",
+      "test": "撤销即时生效；不把密码/token回显",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API04",
+      "api": "API04",
+      "method": "GET",
+      "path": "/api/v1/products",
+      "role": "BUYER",
+      "test": "下架隐藏、售罄可见、稳定分页、非买家403",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API05",
+      "api": "API05",
+      "method": "GET",
+      "path": "/api/v1/buyer/orders",
+      "role": "BUYER",
+      "test": "本人/他人隔离、非法status/分页、到期状态说明",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API06",
+      "api": "API06",
+      "method": "POST",
+      "path": "/api/v1/buyer/orders",
+      "role": "BUYER",
+      "test": "缺货/下架/所有非法quantity；20并发；同键并发/换参；落库失败回滚",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API07",
+      "api": "API07",
+      "method": "GET",
+      "path": "/api/v1/buyer/orders/{order_id}",
+      "role": "BUYER本人",
+      "test": "越权详情/运单/收退款隔离；重启回读；过期旧状态不可付",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API08",
+      "api": "API08",
+      "method": "POST",
+      "path": "/api/v1/buyer/orders/{order_id}/cancel",
+      "role": "BUYER本人",
+      "test": "重复关闭、跨人、付款竞争、超时竞争；库存一次",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API09",
+      "api": "API09",
+      "method": "POST",
+      "path": "/api/v1/buyer/orders/{order_id}/payments",
+      "role": "BUYER本人",
+      "test": "过期/关闭/已付拒绝；同键/不同键并发不重复扣款；响应丢失恢复",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API10",
+      "api": "API10",
+      "method": "POST",
+      "path": "/api/v1/buyer/payments/{payment_id}/query",
+      "role": "BUYER本人",
+      "test": "未知仍未知/成功/明确失败；不会延长到期或新扣款",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API11",
+      "api": "API11",
+      "method": "POST",
+      "path": "/api/v1/buyer/orders/{order_id}/refund-applications",
+      "role": "BUYER本人",
+      "test": "重复、重提、已发货/待付款拒绝；申请与发货并发唯一结果",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API12",
+      "api": "API12",
+      "method": "GET",
+      "path": "/api/v1/warehouse/orders",
+      "role": "WAREHOUSE",
+      "test": "被冻结/已发货不列；跨角色403；旧页面操作仍重查",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API13",
+      "api": "API13",
+      "method": "POST",
+      "path": "/api/v1/warehouse/orders/{order_id}/shipment",
+      "role": "WAREHOUSE",
+      "test": "必填/控制字符/超长、重复、新参数覆盖拒绝、申请竞争",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API14",
+      "api": "API14",
+      "method": "GET",
+      "path": "/api/v1/support/refund-applications",
+      "role": "SUPPORT",
+      "test": "筛选历史、分页、越权、用户自报role无效",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API15",
+      "api": "API15",
+      "method": "POST",
+      "path": "/api/v1/support/refund-applications/{application_id}/review",
+      "role": "SUPPORT",
+      "test": "双客服/同意拒绝竞争；原因空/非法decision；旧申请不能影响新申请",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API16",
+      "api": "API16",
+      "method": "GET",
+      "path": "/api/v1/support/refunds",
+      "role": "SUPPORT",
+      "test": "失败与未知区分；整笔计数不按attempt累加",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API17",
+      "api": "API17",
+      "method": "POST",
+      "path": "/api/v1/support/refunds/{refund_id}/retry",
+      "role": "SUPPORT",
+      "test": "失败重试成功、未知拒绝、重复重试、旧回报竞争不多退",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API18",
+      "api": "API18",
+      "method": "POST",
+      "path": "/api/v1/support/refunds/{refund_id}/query",
+      "role": "SUPPORT",
+      "test": "未知维持冻结；确认成功只结算一次；确认失败才允许retry",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API19",
+      "api": "API19",
+      "method": "GET",
+      "path": "/api/v1/support/payment-anomalies",
+      "role": "SUPPORT",
+      "test": "迟到/验签失败/金额不符/未知/冲突均可查；不直接改状态消失",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API20",
+      "api": "API20",
+      "method": "GET",
+      "path": "/api/v1/support/payment-anomalies/{anomaly_id}",
+      "role": "SUPPORT",
+      "test": "原始关键标识可查但无密钥、token和未脱敏body",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API21",
+      "api": "API21",
+      "method": "POST",
+      "path": "/api/v1/support/payment-anomalies/{anomaly_id}/verify",
+      "role": "SUPPORT",
+      "test": "恶意未签通知不能任填退款；正常迟到可信核实；查询未知/错商户",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API22",
+      "api": "API22",
+      "method": "POST",
+      "path": "/api/v1/support/payment-anomalies/{anomaly_id}/refund",
+      "role": "SUPPORT",
+      "test": "未核实拒绝；重复返回同退款；迟到/未知订单可信资金处理；库存不再释放",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API23",
+      "api": "API23",
+      "method": "POST",
+      "path": "/api/v1/support/payment-anomalies/{anomaly_id}/resolve",
+      "role": "SUPPORT",
+      "test": "写忽略不能抹异常；资金未退拒绝；历史保留",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API24",
+      "api": "API24",
+      "method": "GET",
+      "path": "/api/v1/support/notifications",
+      "role": "SUPPORT",
+      "test": "重放有接收轨迹，无资金重复；无效body记录；分页及权限",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API25",
+      "api": "API25",
+      "method": "GET",
+      "path": "/api/v1/operator/products",
+      "role": "OPERATOR",
+      "test": "与流水、订单占用一致；其他角色403",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API26",
+      "api": "API26",
+      "method": "PATCH",
+      "path": "/api/v1/operator/products/{product_id}",
+      "role": "OPERATOR",
+      "test": "缺字段/非法价格/旧version/调价下架与下单竞争；快照不变",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API27",
+      "api": "API27",
+      "method": "POST",
+      "path": "/api/v1/operator/products/{product_id}/inventory-adjustments",
+      "role": "OPERATOR",
+      "test": "负库存拒绝、同键重复、原因空、与下单并发守恒",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API28",
+      "api": "API28",
+      "method": "GET",
+      "path": "/api/v1/operator/orders",
+      "role": "OPERATOR",
+      "test": "联查筛选、无敏感数据、分页",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API29",
+      "api": "API29",
+      "method": "GET",
+      "path": "/api/v1/operator/orders/{order_id}/reconciliation",
+      "role": "OPERATOR",
+      "test": "正常、退款、迟到、重复、未知、失败明细汇总一致",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API30",
+      "api": "API30",
+      "method": "GET",
+      "path": "/api/v1/operator/summary",
+      "role": "OPERATOR",
+      "test": "不按通知条数累加；未知不当已退；下钻金额一致",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API31",
+      "api": "API31",
+      "method": "POST",
+      "path": "/api/v1/channel/payment-notifications",
+      "role": "模拟渠道HMAC",
+      "test": "重复、错签/重放时间、错金额、未知订单、交易跨单、不同交易同单、迟到、取消竞争",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API32",
+      "api": "API32",
+      "method": "POST",
+      "path": "/api/v1/channel/refund-notifications",
+      "role": "模拟渠道HMAC",
+      "test": "重复成功/失败、旧尝试、错金额/身份/收款、回报与query并发",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API33",
+      "api": "API33",
+      "method": "GET",
+      "path": "/health/live",
+      "role": "无认证（仅必要信息）",
+      "test": "响应快且不泄露配置",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API34",
+      "api": "API34",
+      "method": "GET",
+      "path": "/health/ready",
+      "role": "部署健康探测",
+      "test": "DB断开503、版本标识、不能代替业务冒烟",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API35",
+      "api": "API35",
+      "method": "GET",
+      "path": "/api/v1/support/orders/{order_id}",
+      "role": "SUPPORT",
+      "test": "客服能核实金额/状态；买家调用员工路由403；无敏感凭证",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API36",
+      "api": "API36",
+      "method": "GET",
+      "path": "/api/v1/operator/receipts",
+      "role": "OPERATOR",
+      "test": "总额与分页明细一致，异常和正常分类，未知订单也不丢记录",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API37",
+      "api": "API37",
+      "method": "GET",
+      "path": "/api/v1/operator/refunds",
+      "role": "OPERATOR",
+      "test": "成功金额一致，失败未知不能算实退，角色只读",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API38",
+      "api": "API38",
+      "method": "GET",
+      "path": "/api/v1/operator/payment-anomalies",
+      "role": "OPERATOR",
+      "test": "异常汇总数量与列表一致，不修改状态、不泄密",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-API39",
+      "api": "API39",
+      "method": "GET",
+      "path": "/api/v1/operator/payment-anomalies/{anomaly_id}",
+      "role": "OPERATOR",
+      "test": "明细/汇总可追溯；运营不能借查询权限审核/退款/结案",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-MOCK01",
+      "api": "MOCK01",
+      "method": "POST",
+      "path": "/mock/v1/payments",
+      "role": "商城服务HMAC",
+      "test": "渠道实际扣一次、重启可查、商城不能直接写渠道DB",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-MOCK02",
+      "api": "MOCK02",
+      "method": "GET",
+      "path": "/mock/v1/payments/by-request/{request_id}",
+      "role": "商城服务HMAC",
+      "test": "未知/成功/失败/错商户/查询超时",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-MOCK03",
+      "api": "MOCK03",
+      "method": "GET",
+      "path": "/mock/v1/transactions/{txn_id}",
+      "role": "商城服务HMAC",
+      "test": "伪造通知/不存在/错商户不变实收",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-MOCK04",
+      "api": "MOCK04",
+      "method": "POST",
+      "path": "/mock/v1/refunds",
+      "role": "商城服务HMAC",
+      "test": "首次失败后成功、超时但实退成功、重发不多退/超原额拒绝",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-MOCK05",
+      "api": "MOCK05",
+      "method": "GET",
+      "path": "/mock/v1/refunds/by-request/{request_id}",
+      "role": "商城服务HMAC",
+      "test": "成功/失败/PENDING/未找到/网络超时",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-MOCK06",
+      "api": "MOCK06",
+      "method": "POST",
+      "path": "/mock/admin/rules",
+      "role": "教学开关+独立admin令牌",
+      "test": "开关关闭404、普通token403、非法模式/值拒绝，不暴露签名密钥",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-MOCK07",
+      "api": "MOCK07",
+      "method": "POST",
+      "path": "/mock/admin/notifications/{event_id}/replay",
+      "role": "教学开关+独立admin令牌",
+      "test": "重复/迟到可演示；任意callback_url拒绝、超范围拒绝",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-DEMO01",
+      "api": "DEMO01",
+      "method": "POST",
+      "path": "/internal/demo/clock/advance",
+      "role": "仅教学开关+独立admin令牌",
+      "test": "10分钟前/正好/后边界，重启/多实例统一，并发推进不丢更新；默认真实10分钟",
+      "result": "NOT_RUN"
+    },
+    {
+      "id": "HTTP-DEMO02",
+      "api": "DEMO02",
+      "method": "GET",
+      "path": "/internal/demo/clock",
+      "role": "仅教学开关+模拟渠道服务HMAC或独立admin令牌",
+      "test": "多进程偏移一致，重启保留，鉴权/教学开关；时钟不可由客户端回拨",
+      "result": "NOT_RUN"
+    }
+  ],
+  "confirmed": [
+    "U01",
+    "U02",
+    "U03",
+    "U04",
+    "U05",
+    "U06"
+  ],
+  "physicalMappings": {
+    "uuid": "char(36) ascii_bin",
+    "timestamptz": "datetime(6) UTC",
+    "jsonb": "json",
+    "integer": "int"
+  }
+}

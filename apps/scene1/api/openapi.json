@@ -1,0 +1,1015 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "scene1 API",
+    "version": "0.2-worktree"
+  },
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "API01",
+        "summary": "匿名",
+        "description": "body: login_name:string(3..64)，password:string(教学Demo模式6..128，非Demo模式8..128)，均必填\n比对哈希、账号启用；失败统一INVALID_CREDENTIALS，不泄露账号是否存在；限流；密码/token不入日志",
+        "responses": {
+          "200": {
+            "description": "200: token:string，expires_at:UTC，account:Account"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "API02",
+        "summary": "所有已登录角色",
+        "description": "无body\n从会话取身份与最新enabled/role，不信任query/user_id",
+        "responses": {
+          "200": {
+            "description": "200: Account"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "API03",
+        "summary": "所有已登录角色",
+        "description": "无body\n撤销当前会话，已撤销token再次请求401；不影响其他会话",
+        "responses": {
+          "200": {
+            "description": "200: {revoked:true}"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/products": {
+      "get": {
+        "operationId": "API04",
+        "summary": "BUYER",
+        "description": "query: cursor?,limit?\n只返回在售；可售0仍可显示售罄；不要求加购物车",
+        "responses": {
+          "200": {
+            "description": "200: Page<Product>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/buyer/orders": {
+      "get": {
+        "operationId": "API05",
+        "summary": "BUYER",
+        "description": "query: status?（七主状态），cursor?,limit?\n服务端强制buyer_id当前用户；禁止query任意buyer_id",
+        "responses": {
+          "200": {
+            "description": "200: Page<OrderSummary>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      },
+      "post": {
+        "operationId": "API06",
+        "summary": "BUYER",
+        "description": "body: product_id:UUID，quantity:number(整数1或2)，均必填；Idempotency-Key必填\n锁商品合法快照；本事务订单+占用+流水+幂等；客户端金额/状态/买家ID未知字段400",
+        "responses": {
+          "200": {
+            "description": "201: OrderDetail；同键成功重放原http状态并meta.replayed=true"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/buyer/orders/{order_id}": {
+      "get": {
+        "operationId": "API07",
+        "summary": "BUYER本人",
+        "description": "path UUID\n他人订单与不存在统一404；过期未扫时executable_actions不放付款，显示期限已到，worker负责关闭；只读GET不修改状态",
+        "responses": {
+          "200": {
+            "description": "200: OrderDetail"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/buyer/orders/{order_id}/cancel": {
+      "post": {
+        "operationId": "API08",
+        "summary": "BUYER本人",
+        "description": "body: reason:string(1..500)；Idempotency-Key\n仅待付款关闭；同一关闭重复回当前事实、不多释放；已付款409；已超时保持TIMEOUT原因",
+        "responses": {
+          "200": {
+            "description": "200: OrderDetail"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/buyer/orders/{order_id}/payments": {
+      "post": {
+        "operationId": "API09",
+        "summary": "BUYER本人",
+        "description": "空JSON {}；Idempotency-Key\n创建或复用非失败意图+outbox，金额由快照；过期先在锁内关闭后持久化拒绝事实；明确失败后可新意图，UNKNOWN先查原意图",
+        "responses": {
+          "200": {
+            "description": "202: PaymentIntent"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/buyer/payments/{payment_id}/query": {
+      "post": {
+        "operationId": "API10",
+        "summary": "BUYER本人",
+        "description": "空JSON {}；Idempotency-Key\n仅查询该意图原渠道请求；可信结果走共享结算入口；非本人404",
+        "responses": {
+          "200": {
+            "description": "202: PaymentIntent（查询任务已排队）"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/buyer/orders/{order_id}/refund-applications": {
+      "post": {
+        "operationId": "API11",
+        "summary": "BUYER本人",
+        "description": "body: reason:string(1..500)；Idempotency-Key\n仅PENDING_SHIPMENT；锁内申请+冻结；活动申请同键重放原资源，新键返回409 ACTIVE_REFUND；已驳回可新申请",
+        "responses": {
+          "200": {
+            "description": "201: RefundApplication"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/warehouse/orders": {
+      "get": {
+        "operationId": "API12",
+        "summary": "WAREHOUSE",
+        "description": "query: cursor?,limit?\n仅PENDING_SHIPMENT且无活动退款；必要单据/商品/数量，不暴露会话或渠道敏感字段",
+        "responses": {
+          "200": {
+            "description": "200: Page<WarehouseOrder>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/warehouse/orders/{order_id}/shipment": {
+      "post": {
+        "operationId": "API13",
+        "summary": "WAREHOUSE",
+        "description": "body: carrier:string(1..80)，tracking_no:string(1..80)；Idempotency-Key\n锁内待发货且无活动退款；登记一次+SHIP；同键同参重放；新键重复409 SHIPMENT_EXISTS，运单不覆盖",
+        "responses": {
+          "200": {
+            "description": "201: Shipment"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/refund-applications": {
+      "get": {
+        "operationId": "API14",
+        "summary": "SUPPORT",
+        "description": "query: status?（申请枚举），cursor?,limit?\n默认PENDING；可查历次审核，拒绝不删",
+        "responses": {
+          "200": {
+            "description": "200: Page<RefundApplication>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/refund-applications/{application_id}/review": {
+      "post": {
+        "operationId": "API15",
+        "summary": "SUPPORT",
+        "description": "body: decision:APPROVE或REJECT，reason:string(1..500)；Idempotency-Key\n一次结论；同键同参回原；已审核同结论新键回原事实且不覆盖原因，冲突结论409；批准创建唯一退款/首尝试/outbox，拒绝解除冻结",
+        "responses": {
+          "200": {
+            "description": "200: {application:RefundApplication,refund:Refund|null}"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/refunds": {
+      "get": {
+        "operationId": "API16",
+        "summary": "SUPPORT",
+        "description": "query: status?（退款枚举），kind?:NORMAL或EXCEPTION，cursor?,limit?\n展示FAILED/UNKNOWN/READY及原收款和尝试；默认未SUCCEEDED",
+        "responses": {
+          "200": {
+            "description": "200: Page<Refund>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/refunds/{refund_id}/retry": {
+      "post": {
+        "operationId": "API17",
+        "summary": "SUPPORT",
+        "description": "body: reason:string(1..500)；Idempotency-Key\n仅可信FAILED可新尝试，UNKNOWN/PROCESSING拒绝RESULT_UNKNOWN或STATE_CONFLICT；唯一活动尝试；同键返回原尝试",
+        "responses": {
+          "200": {
+            "description": "202: Refund"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/refunds/{refund_id}/query": {
+      "post": {
+        "operationId": "API18",
+        "summary": "SUPPORT",
+        "description": "body: reason:string(1..500)；Idempotency-Key\n排队查询原尝试；不新建资金请求；可信成功/失败驱动同一结算入口",
+        "responses": {
+          "200": {
+            "description": "202: Refund"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/payment-anomalies": {
+      "get": {
+        "operationId": "API19",
+        "summary": "SUPPORT",
+        "description": "query: status?（异常枚举），type?（异常类型），cursor?,limit?\n已解决可按筛选查询，默认未RESOLVED；保留无效通知处理结论",
+        "responses": {
+          "200": {
+            "description": "200: Page<Anomaly>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/payment-anomalies/{anomaly_id}": {
+      "get": {
+        "operationId": "API20",
+        "summary": "SUPPORT",
+        "description": "path UUID\n含脱敏通知和核查、退款历史；无任意改状态按钮",
+        "responses": {
+          "200": {
+            "description": "200: AnomalyDetail"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/payment-anomalies/{anomaly_id}/verify": {
+      "post": {
+        "operationId": "API21",
+        "summary": "SUPPORT",
+        "description": "body: reason:string(1..500)；Idempotency-Key\n固定渠道可信查询；商户/交易/金额归属全校验；body不允许直接写verified=true/金额。查询失败保持待核实，记录动作",
+        "responses": {
+          "200": {
+            "description": "200: AnomalyDetail；外部未确认可202同DTO"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/payment-anomalies/{anomaly_id}/refund": {
+      "post": {
+        "operationId": "API22",
+        "summary": "SUPPORT",
+        "description": "body: reason:string(1..500)；Idempotency-Key\n仅FUNDS_CONFIRMED且receipt存在、未成功退款；按实际全额EXCEPTION；创建一次逻辑退款/尝试/outbox；无库存动作",
+        "responses": {
+          "200": {
+            "description": "202: Refund"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/payment-anomalies/{anomaly_id}/resolve": {
+      "post": {
+        "operationId": "API23",
+        "summary": "SUPPORT",
+        "description": "body: reason:string(1..500)；Idempotency-Key\n仅可信NO_FUNDS等无需资金动作可人工结案；有资金必须SUCCEEDED实退才系统收尾，CONFLICT/UNKNOWN不得结案",
+        "responses": {
+          "200": {
+            "description": "200: AnomalyDetail"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/notifications": {
+      "get": {
+        "operationId": "API24",
+        "summary": "SUPPORT",
+        "description": "query: kind?,process_result?,cursor?,limit?\n可查询鉴权失败、重复、金额不符、未知订单及处理结论；字段脱敏",
+        "responses": {
+          "200": {
+            "description": "200: Page<Notification>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/products": {
+      "get": {
+        "operationId": "API25",
+        "summary": "OPERATOR",
+        "description": "query: cursor?,limit?\n含上下架两类、库存四分量及版本；只读",
+        "responses": {
+          "200": {
+            "description": "200: Page<Product>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/products/{product_id}": {
+      "patch": {
+        "operationId": "API26",
+        "summary": "OPERATOR",
+        "description": "body: version:integer>=0，reason:string(1..500)，name?:string(1..120)，unit_price_cents?:Money，sale_status?:枚举；至少一项变更；Idempotency-Key\n不允许body直接改库存/旧单；锁内比version，保留审计变更前后",
+        "responses": {
+          "200": {
+            "description": "200: Product"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/products/{product_id}/inventory-adjustments": {
+      "post": {
+        "operationId": "API27",
+        "summary": "OPERATOR",
+        "description": "body: delta:integer(-1000000..1000000且非0)，reason:string(1..500)，version:integer>=0；Idempotency-Key\n只调available及adjustment_net，不改reserved；available+delta范围合法，保存前后值和人",
+        "responses": {
+          "200": {
+            "description": "201: InventoryEntry"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/orders": {
+      "get": {
+        "operationId": "API28",
+        "summary": "OPERATOR",
+        "description": "query: order_no?,buyer_id?:UUID,status?,cursor?,limit?\n运营可跨订单核对，仅只读；不提供修改订单状态接口",
+        "responses": {
+          "200": {
+            "description": "200: Page<OrderSummary>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/orders/{order_id}/reconciliation": {
+      "get": {
+        "operationId": "API29",
+        "summary": "OPERATOR",
+        "description": "path UUID\n同一一致快照关联订单、库存流水、收款、退款、发货、异常/审核历史及差异；未知状态不能标全部结清",
+        "responses": {
+          "200": {
+            "description": "200: Reconciliation"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/summary": {
+      "get": {
+        "operationId": "API30",
+        "summary": "OPERATOR",
+        "description": "query: product_id?:UUID；无额外日期过滤本题保持全活动累计\n可信正常/异常实收、成功实退/净留存、未核实/未知/失败/待办数量单列，库存守恒",
+        "responses": {
+          "200": {
+            "description": "200: Summary"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/channel/payment-notifications": {
+      "post": {
+        "operationId": "API31",
+        "summary": "模拟渠道HMAC",
+        "description": "body: event_id,merchant_ref,order_ref,request_id,txn_id,amount_cents:Money,currency:CNY,status:SUCCEEDED或FAILED,occurred_at:UTC；全部必填\n先限body/解析安全摘要，再鉴权、匹配、唯一归属、时限；有效失败只更新意图不记实收；业务异常持久化后200 ACK，基础设施失败503，签名错401仍留记录",
+        "responses": {
+          "200": {
+            "description": "200: {notification_id:UUID,result:处理枚举}；无效鉴权401"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/channel/refund-notifications": {
+      "post": {
+        "operationId": "API32",
+        "summary": "模拟渠道HMAC",
+        "description": "body: event_id,merchant_ref,txn_id,request_id,refund_id,amount_cents:Money,currency:CNY,status:SUCCEEDED或FAILED,occurred_at:UTC，failure_code?:string；全部必填项按上文\n精确匹配尝试/收款/金额；成功仅首次结算；旧/矛盾回报留冲突，不能倒退/多退；失败须来自渠道明确终态",
+        "responses": {
+          "200": {
+            "description": "200: {notification_id:UUID,result:处理枚举}；签名错401"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "operationId": "API33",
+        "summary": "无认证（仅必要信息）",
+        "description": "无\n只证明进程存活，无DB/密钥/业务细节",
+        "responses": {
+          "200": {
+            "description": "200: {status:UP}"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "API34",
+        "summary": "部署健康探测",
+        "description": "无\n检查DB/迁移就绪，外部依赖故障有明确ready策略；版本为构建注入SHA",
+        "responses": {
+          "200": {
+            "description": "200或503: {status:UP或DOWN,version:string}"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/support/orders/{order_id}": {
+      "get": {
+        "operationId": "API35",
+        "summary": "SUPPORT",
+        "description": "path UUID\n用于审核时查看订单快照、支付/退款与发货事实；仅安全字段，不允许借此改订单；买家仍只本人",
+        "responses": {
+          "200": {
+            "description": "200: OrderDetail"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/receipts": {
+      "get": {
+        "operationId": "API36",
+        "summary": "OPERATOR",
+        "description": "query: classification?,order_id?:UUID,cursor?,limit?\n汇总实收下钻，含可信未知订单收款，未核实通知不混入实收",
+        "responses": {
+          "200": {
+            "description": "200: Page<Receipt>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/refunds": {
+      "get": {
+        "operationId": "API37",
+        "summary": "OPERATOR",
+        "description": "query: status?,kind?,order_id?:UUID,cursor?,limit?\n汇总实退/失败/未知下钻，按逻辑退款计额不按attempt计额",
+        "responses": {
+          "200": {
+            "description": "200: Page<Refund>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/payment-anomalies": {
+      "get": {
+        "operationId": "API38",
+        "summary": "OPERATOR",
+        "description": "query: status?,type?,cursor?,limit?\n运营可只读核查包括未知订单的全部活动/历史异常，不限有订单才可查",
+        "responses": {
+          "200": {
+            "description": "200: Page<Anomaly>"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/api/v1/operator/payment-anomalies/{anomaly_id}": {
+      "get": {
+        "operationId": "API39",
+        "summary": "OPERATOR",
+        "description": "path UUID\n只读核查通知处理结论、客服核实与退款记录；客服操作仍仅SUPPORT可用",
+        "responses": {
+          "200": {
+            "description": "200: AnomalyDetail"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/mock/v1/payments": {
+      "post": {
+        "operationId": "MOCK01",
+        "summary": "商城服务HMAC",
+        "description": "body: merchant_ref,request_id,order_ref,amount_cents:Money,currency:CNY\n幂等键固定、相同参数回原交易，换参409；模拟成功/失败/未知/响应丢失",
+        "responses": {
+          "200": {
+            "description": "200: ChannelPayment；受控超时可无响应"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/mock/v1/payments/by-request/{request_id}": {
+      "get": {
+        "operationId": "MOCK02",
+        "summary": "商城服务HMAC",
+        "description": "path ASCII16..80，query: merchant_ref必填\n同商户可查，不以未找到直接允许另建交易",
+        "responses": {
+          "200": {
+            "description": "200: ChannelPayment；不存在404（仅表示尚无记录，商城先保持待确认）"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/mock/v1/transactions/{txn_id}": {
+      "get": {
+        "operationId": "MOCK03",
+        "summary": "商城服务HMAC",
+        "description": "path ASCII1..80，query: merchant_ref必填\n用于异常款项独立核实，固定渠道URL及商户身份",
+        "responses": {
+          "200": {
+            "description": "200: ChannelPayment；不存在404"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/mock/v1/refunds": {
+      "post": {
+        "operationId": "MOCK04",
+        "summary": "商城服务HMAC",
+        "description": "body: merchant_ref,request_id,txn_id,amount_cents:Money,currency:CNY\n锁原渠道收款，校验商户及全额累计；同键返回同退款，明确失败才能新键",
+        "responses": {
+          "200": {
+            "description": "200: ChannelRefund；受控超时可无响应"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/mock/v1/refunds/by-request/{request_id}": {
+      "get": {
+        "operationId": "MOCK05",
+        "summary": "商城服务HMAC",
+        "description": "path ASCII16..80，query: merchant_ref必填\n可信终态稳定，未知不新退款",
+        "responses": {
+          "200": {
+            "description": "200: ChannelRefund；不存在404（未确认，不当明确失败）"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/mock/admin/rules": {
+      "post": {
+        "operationId": "MOCK06",
+        "summary": "教学开关+独立admin令牌",
+        "description": "body: target_order_ref:string(1..80)，operation,mode（规则表枚举），target_request_id?:string(16..80)，attempt_no?:integer>=1，delay_ms?:0..600000，repeat_count?:1..20，remaining_uses?:1..20\n只控制指定订单及尝试；预先为已有订单设置首败/二次成功或延迟；业务角色无权",
+        "responses": {
+          "200": {
+            "description": "201: SimulationRule"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/mock/admin/notifications/{event_id}/replay": {
+      "post": {
+        "operationId": "MOCK07",
+        "summary": "教学开关+独立admin令牌",
+        "description": "path event_id，body: repeat_count:1..20，delay_ms:0..600000\n只重发已有真实事件，目标回调固定白名单；重复event使用新签名nonce但同业务ID",
+        "responses": {
+          "200": {
+            "description": "202: {event_id:string,queued:number}"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/internal/demo/clock/advance": {
+      "post": {
+        "operationId": "DEMO01",
+        "summary": "仅教学开关+独立admin令牌",
+        "description": "body: seconds:integer(1..3600)\n数据库原子推进demo_clock，记录安全管理标识；只前进，商城/模拟渠道同源；不改认证/HMAC/租约；不允许公网无鉴权",
+        "responses": {
+          "200": {
+            "description": "200: {business_now:UTC,advanced_seconds:number,offset_seconds:number,version:number}"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    },
+    "/internal/demo/clock": {
+      "get": {
+        "operationId": "DEMO02",
+        "summary": "仅教学开关+模拟渠道服务HMAC或独立admin令牌",
+        "description": "无body\n统一读取持久偏移供mock ClockProvider使用，真实模式教学端点404；不泄露DB配置/签名密钥；普通业务身份禁止",
+        "responses": {
+          "200": {
+            "description": "200: {business_now:UTC,offset_seconds:number,version:number}"
+          },
+          "400": {
+            "description": "校验失败"
+          },
+          "401": {
+            "description": "身份/签名失败"
+          },
+          "409": {
+            "description": "业务冲突"
+          }
+        }
+      }
+    }
+  }
+}
