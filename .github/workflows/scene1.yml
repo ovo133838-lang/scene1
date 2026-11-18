@@ -19,7 +19,7 @@ jobs:
         working-directory: apps/scene1
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: apps/scene1/go.mod
           cache-dependency-path: apps/scene1/go.sum
@@ -64,7 +64,7 @@ jobs:
         working-directory: apps/scene1
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: apps/scene1/go.mod
           cache-dependency-path: apps/scene1/go.sum
