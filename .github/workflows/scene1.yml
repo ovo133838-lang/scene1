@@ -39,12 +39,12 @@ jobs:
           cd dist
           sha256sum scene1 smoke.py deploy-linux.sh > SHA256SUMS
           tar -czf ../scene1-linux-amd64.tar.gz scene1 smoke.py deploy-linux.sh SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: scene1-quality-${{ github.sha }}
           path: apps/scene1/evidence/ci-quality/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: scene1-linux-${{ github.sha }}
           path: apps/scene1/scene1-linux-amd64.tar.gz
@@ -89,7 +89,7 @@ jobs:
         env:
           SCENE1_MATRIX_OUT: ${{ github.workspace }}/apps/scene1/evidence/ci-integration
         run: python scripts/api_barrier_20261112.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: scene1-integration-${{ github.sha }}
@@ -120,7 +120,7 @@ jobs:
           scp -i ~/.ssh/scene1-key scene1-linux-amd64.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/scene1-$RELEASE_SHA.tar.gz"
           tar -xzf scene1-linux-amd64.tar.gz deploy-linux.sh
           ssh -i ~/.ssh/scene1-key "$DEPLOY_USER@$DEPLOY_HOST" "sudo bash -s -- /tmp/scene1-$RELEASE_SHA.tar.gz $RELEASE_SHA" < deploy-linux.sh | tee deployment-result.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: scene1-deployment-${{ github.sha }}
